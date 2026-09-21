@@ -95,9 +95,9 @@ export default function Home() {
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     canvas.getContext('2d').drawImage(video, 0, 0)
-    const dataUrl = canvas.toDataURL('image/png')
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
     setPreview(dataUrl)
-    setFileName('camera-capture.png')
+    setFileName('camera-capture.jpg')
     stopStream()
   }
 

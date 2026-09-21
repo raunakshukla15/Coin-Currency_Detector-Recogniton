@@ -84,7 +84,7 @@ export function sendContact({ text, rating = 0, email = '', username = '' }) {
 const VISION_MODEL = 'openai/gpt-4o-mini'
 const CHAT_MODEL = 'openai/gpt-4o-mini'
 
-async function callAPI(messages, model) {
+async function callAPI(messages, model, maxTokens = 2000) {
   if (!API_KEY) {
     const err = new Error(
       'Missing OpenRouter API key. Create a `.env` file with VITE_OPENROUTER_API_KEY set (see `.env.example`).'
@@ -98,7 +98,10 @@ async function callAPI(messages, model) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${API_KEY}`,
     },
-    body: JSON.stringify({ model, messages }),
+    // Cap max_tokens: OpenRouter reserves (prompt + max_tokens) against your
+    // credit balance. The default (~16k) exceeds small balances and causes
+    // 402 errors. Our JSON answer fits comfortably in 2000 tokens.
+    body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
   })
   if (!res.ok) {
     const errText = await res.text()
@@ -119,7 +122,48 @@ async function callAPI(messages, model) {
   return data.choices?.[0]?.message?.content || ''
 }
 
+// Downscale a data-URL image so its longest side is <= maxDim, encoded as
+// JPEG. Returns the original string if anything fails or it's already small.
+function downscaleImage(dataUrl, maxDim = 1024, quality = 0.82) {
+  return new Promise((resolve) => {
+    try {
+      if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) {
+        resolve(dataUrl)
+        return
+      }
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const longest = Math.max(img.width || 0, img.height || 0)
+          if (!longest || longest <= maxDim) {
+            resolve(dataUrl)
+            return
+          }
+          const scale = maxDim / longest
+          const w = Math.max(1, Math.round(img.width * scale))
+          const h = Math.max(1, Math.round(img.height * scale))
+          const canvas = document.createElement('canvas')
+          canvas.width = w
+          canvas.height = h
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+          resolve(canvas.toDataURL('image/jpeg', quality))
+        } catch (e) {
+          resolve(dataUrl)
+        }
+      }
+      img.onerror = () => resolve(dataUrl)
+      img.src = dataUrl
+    } catch (e) {
+      resolve(dataUrl)
+    }
+  })
+}
+
 export async function identifyItems(imageBase64) {
+  // Shrink large photos before upload: full-res phone/camera shots cost
+  // thousands of input tokens and can push the request over a small credit
+  // balance (402). 1024px is plenty for coin identification.
+  const smallImage = await downscaleImage(imageBase64, 1024).catch(() => imageBase64)
   const content = [
     {
       type: 'text',
@@ -181,7 +225,7 @@ Return ONLY the JSON array, no extra text.`,
     },
     {
       type: 'image_url',
-      image_url: { url: imageBase64 },
+      image_url: { url: smallImage },
     },
   ]
 
