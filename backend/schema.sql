@@ -1,0 +1,22 @@
+-- Run this once against your MySQL server (e.g. via the MySQL CLI or MySQL Workbench).
+-- Example: mysql -u root -p < schema.sql
+
+CREATE DATABASE IF NOT EXISTS coinscan CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE coinscan;
+
+CREATE TABLE IF NOT EXISTS users (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(40) NOT NULL UNIQUE,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS contact_messages (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(40) DEFAULT '',
+  email VARCHAR(255) DEFAULT '',
+  rating TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  message TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
