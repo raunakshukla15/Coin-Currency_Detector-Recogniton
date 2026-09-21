@@ -107,12 +107,22 @@ export default function Home() {
     setScanError('')
     try {
       const items = await identifyItems(preview)
+      // The AI returns a generic "Unidentified Coin" placeholder when it can't
+      // parse anything — treat that as a real failure so the user retries
+      // instead of landing on an empty result page.
+      const onlyFallback =
+        Array.isArray(items) &&
+        items.length === 1 &&
+        (items[0]?.name === 'Unidentified Coin' || items[0]?.match === 0)
+      if (onlyFallback) {
+        throw new Error(items[0]?.description || 'Unable to identify the image. Please try another, clearer photo.')
+      }
       saveHistory(items, preview)
       sessionStorage.setItem('coinscan_lastident', JSON.stringify({ items, image: preview || null }))
       nav('/result')
     } catch (e) {
       console.error(e)
-      setScanError('Unable to identify the image. Please try another, clearer photo.')
+      setScanError(e?.message || 'Unable to identify the image. Please try another, clearer photo.')
     } finally {
       setScanning(false)
     }

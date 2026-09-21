@@ -1,5 +1,8 @@
 const API_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const API_KEY = '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'
+// NEVER hardcode the key here — it gets revoked by OpenRouter once pushed to GitHub.
+// Put it in a local `.env` file as VITE_OPENROUTER_API_KEY (see `.env.example`).
+// Vite only exposes env vars prefixed with VITE_ to the browser.
+const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || ''
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api'
 
@@ -82,6 +85,13 @@ const VISION_MODEL = 'openai/gpt-4o-mini'
 const CHAT_MODEL = 'openai/gpt-4o-mini'
 
 async function callAPI(messages, model) {
+  if (!API_KEY) {
+    const err = new Error(
+      'Missing OpenRouter API key. Create a `.env` file with VITE_OPENROUTER_API_KEY set (see `.env.example`).'
+    )
+    err.status = 0
+    throw err
+  }
   const res = await fetch(API_URL, {
     method: 'POST',
     headers: {
@@ -91,8 +101,19 @@ async function callAPI(messages, model) {
     body: JSON.stringify({ model, messages }),
   })
   if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`API error ${res.status}: ${err}`)
+    const errText = await res.text()
+    let hint = ''
+    if (res.status === 401) {
+      hint =
+        ' (401 Unauthorized: your OpenRouter key is missing, invalid, or was revoked after being pushed to Git — get a new one at https://openrouter.ai/keys)'
+    } else if (res.status === 402) {
+      hint = ' (402: OpenRouter account has insufficient credits — top up at https://openrouter.ai/credits)'
+    } else if (res.status === 429) {
+      hint = ' (429: rate limited — wait a moment and retry)'
+    }
+    const err = new Error(`API error ${res.status}: ${errText}${hint}`)
+    err.status = res.status
+    throw err
   }
   const data = await res.json()
   return data.choices?.[0]?.message?.content || ''
