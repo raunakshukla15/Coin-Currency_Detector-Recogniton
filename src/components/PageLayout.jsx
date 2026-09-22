@@ -7,7 +7,7 @@ import BackgroundFX from './BackgroundFX.jsx'
 
 export default function PageLayout({ children }) {
   const loc = useLocation()
-  const showTopBar = loc.pathname === '/home' || loc.pathname === '/result'
+  const showTopBar = loc.pathname === '/home' || loc.pathname === '/result' || loc.pathname === '/history'
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (

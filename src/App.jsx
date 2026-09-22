@@ -4,6 +4,7 @@ import Landing from './pages/Landing.jsx'
 import Login from './pages/Login.jsx'
 import Signup from './pages/Signup.jsx'
 import Home from './pages/Home.jsx'
+import History from './pages/History.jsx'
 import IdentificationResult from './pages/IdentificationResult.jsx'
 import Collection from './pages/Collection.jsx'
 import Chatbot from './pages/Chatbot.jsx'
@@ -53,6 +54,7 @@ export function AppRoutes() {
         <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
         <Route path="/signup" element={<PublicOnly><Signup /></PublicOnly>} />
         <Route path="/home" element={<RequireAuth><Home /></RequireAuth>} />
+        <Route path="/history" element={<RequireAuth><History /></RequireAuth>} />
         <Route path="/result" element={<RequireAuth><IdentificationResult /></RequireAuth>} />
         <Route path="/collection" element={<RequireAuth><Collection /></RequireAuth>} />
         <Route path="/chatbot" element={<RequireAuth><Chatbot /></RequireAuth>} />

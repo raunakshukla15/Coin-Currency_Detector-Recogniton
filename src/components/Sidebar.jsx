@@ -1,73 +1,21 @@
-import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Home, ArrowLeftRight, MessageCircle, Coins, MessageSquare, LogOut, History, ExternalLink } from 'lucide-react'
+import { Home, ArrowLeftRight, MessageCircle, Coins, MessageSquare, LogOut, History } from 'lucide-react'
 import Logo from './Logo.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 
 const NAV = [
   { to: '/home', label: 'Home', icon: Home },
+  { to: '/history', label: 'Upload History', icon: History },
   { to: '/converter', label: 'Currency Converter', icon: ArrowLeftRight },
   { to: '/chatbot', label: 'Chatbot', icon: MessageCircle },
   { to: '/collection', label: 'Collection', icon: Coins },
   { to: '/contact', label: 'Contact Us', icon: MessageSquare }
 ]
 
-const HISTORY_KEY = 'coinscan_history'
-
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    if (raw) {
-      const list = JSON.parse(raw)
-      if (Array.isArray(list)) return list
-    }
-  } catch (e) {
-    /* ignore */
-  }
-  return []
-}
-
-function timeAgo(iso) {
-  const then = new Date(iso).getTime()
-  if (!Number.isFinite(then)) return 'Just now'
-  const diff = Math.max(0, Date.now() - then)
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'Just now'
-  if (mins < 60) return `${mins} min ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs} hr ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
-
 export default function Sidebar() {
   const loc = useLocation()
   const nav = useNavigate()
   const { logout } = useAuth()
-  const [history, setHistory] = useState(loadHistory)
-
-  useEffect(() => {
-    const refresh = () => setHistory(loadHistory())
-    window.addEventListener('coinscan-history', refresh)
-    window.addEventListener('storage', refresh)
-    return () => {
-      window.removeEventListener('coinscan-history', refresh)
-      window.removeEventListener('storage', refresh)
-    }
-  }, [])
-
-  const openDetails = (entry) => {
-    try {
-      sessionStorage.setItem(
-        'coinscan_lastident',
-        JSON.stringify({ items: entry.items, image: entry.image || null })
-      )
-    } catch (e) {
-      /* ignore */
-    }
-    nav('/result')
-  }
 
   return (
     <aside
@@ -112,48 +60,8 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
-        {history.length > 0 && (
-          <>
-            <div className="divider" style={{ margin: '6px 0 2px' }} />
-            <div className="sidebar-history">
-              <div className="sidebar-history-head">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                  <History size={13.5} />
-                  Upload History
-                </span>
-                <span className="sidebar-history-count">{history.length}</span>
-              </div>
-              <div className="sidebar-history-list">
-                {history.map((entry) => (
-                  <button
-                    key={entry.id}
-                    className="sidebar-history-item"
-                    onClick={() => openDetails(entry)}
-                    title={`View details — ${entry.name}`}
-                  >
-                    <div className="sidebar-history-thumb">
-                      {entry.image ? (
-                        <img src={entry.image} alt="" />
-                      ) : (
-                        <Coins size={15} />
-                      )}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="sidebar-history-name">{entry.name}</div>
-                      <div className="sidebar-history-time">{timeAgo(entry.timestamp)}</div>
-                    </div>
-                    <span className="sidebar-history-view">
-                      <ExternalLink size={12.5} />
-                      View
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
+      {/* spacer pushes logout to the bottom now that history lives on its own page */}
+      <div style={{ flex: 1, minHeight: 0 }} />
 
       <div className="divider" style={{ margin: '16px 0 14px' }} />
 
