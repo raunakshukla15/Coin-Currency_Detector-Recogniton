@@ -1,5 +1,6 @@
 """Contact Us endpoint: stores feedback and emails it via SMTP."""
 
+import re
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -12,6 +13,8 @@ import db
 
 router = APIRouter(prefix="/api/contact", tags=["contact"])
 
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
 
 class ContactIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
@@ -21,7 +24,11 @@ class ContactIn(BaseModel):
 
 
 def send_email(text: str, rating: int, email: str, username: str) -> bool:
-    """Deliver the feedback message to CONTACT_TO via SMTP. Returns True on success."""
+    """Deliver the feedback message to CONTACT_TO via SMTP. Returns True on success.
+
+    Called AFTER the row is already persisted — an SMTP outage must never
+    lose the database submission. Failures are contained here (False).
+    """
     if not config.SMTP_USER or not config.SMTP_PASSWORD:
         return False
 
@@ -49,7 +56,8 @@ def send_email(text: str, rating: int, email: str, username: str) -> bool:
                 srv.send_message(msg)
         else:
             with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=20) as srv:
-                srv.starttls(context=ssl.create_default_context())
+                if config.SMTP_STARTTLS:
+                    srv.starttls(context=ssl.create_default_context())
                 srv.login(config.SMTP_USER, config.SMTP_PASSWORD)
                 srv.send_message(msg)
         return True
@@ -63,13 +71,19 @@ def submit(body: ContactIn):
     if not text:
         raise HTTPException(status_code=422, detail="Feedback message cannot be empty.")
 
+    email = body.email.strip()
+    if email and not EMAIL_RE.match(email):
+        raise HTTPException(status_code=422, detail="Please enter a valid email address.")
+
+    # 1) Persist FIRST — the message is never lost to a later SMTP failure.
     try:
         db.execute(
             "INSERT INTO contact_messages (name, email, rating, message) VALUES (%s, %s, %s, %s)",
-            (body.username.strip(), body.email.strip(), body.rating, text),
+            (body.username.strip(), email, body.rating, text),
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
 
-    email_sent = send_email(text, body.rating, body.email.strip(), body.username.strip())
+    # 2) Best-effort email — failure only flips emailSent=false.
+    email_sent = send_email(text, body.rating, email, body.username.strip())
     return {"ok": True, "saved": True, "emailSent": email_sent}

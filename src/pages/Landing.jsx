@@ -38,7 +38,7 @@ export default function Landing() {
         }}
       >
         <span
-          className="anim-fade-up"
+          className="anim-fade-up landing-badge"
           style={{
             display: 'inline-flex',
             alignItems: 'center',

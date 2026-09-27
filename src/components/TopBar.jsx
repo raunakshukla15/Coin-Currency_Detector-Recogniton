@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { HelpCircle, Sun, Moon } from 'lucide-react'
-import ThemeToggle from './ThemeToggle.jsx'
 import Modal from './Modal.jsx'
 import Logo from './Logo.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
@@ -8,15 +7,8 @@ import { useTheme } from '../context/ThemeContext.jsx'
 
 export default function TopBar() {
   const [aboutOpen, setAboutOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [toast, setToast] = useState(null)
   const { user } = useAuth()
   const { theme, toggleTheme } = useTheme()
-
-  const showToast = (msg) => {
-    setToast(msg)
-    setTimeout(() => setToast(null), 2400)
-  }
 
   return (
     <>
@@ -43,12 +35,11 @@ export default function TopBar() {
         </button>
 
         <div style={{ position: 'relative' }}>
-          <button
+          {/* Display-only identity chip (not an interactive control). */}
+          <div
             className="hbtn hbtn-profile"
-            type="button"
-            title="Profile"
-            tabIndex={-1}
-            style={{ cursor: 'default', pointerEvents: 'none' }}
+            title={user?.email || ''}
+            style={{ cursor: 'default' }}
           >
             <span
               style={{
@@ -81,7 +72,7 @@ export default function TopBar() {
             >
               {user?.username || 'Raunak'}
             </span>
-          </button>
+          </div>
         </div>
       </div>
 
@@ -108,59 +99,6 @@ export default function TopBar() {
           </div>
         </div>
       </Modal>
-
-      <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Settings" width={520}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-          <div>
-            <div className="label">Display name</div>
-            <input className="input" defaultValue={user?.username || 'Raunak'} style={{ padding: '12px 16px' }} />
-          </div>
-          <div>
-            <div className="label">Email</div>
-            <input className="input" defaultValue={user?.email || 'raunak@coinscan.io'} style={{ padding: '12px 16px' }} />
-          </div>
-          <div>
-            <div className="label">Theme</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <ThemeToggle />
-              <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>Toggles between dark &amp; light cinematic modes</span>
-            </div>
-          </div>
-          <button
-            className="btn btn-primary btn-md"
-            onClick={() => {
-              setSettingsOpen(false)
-              showToast('Settings saved')
-            }}
-          >
-            Save Preferences
-          </button>
-        </div>
-      </Modal>
-
-      {toast && (
-        <div
-          className="anim-fade-up"
-          style={{
-            position: 'fixed',
-            bottom: 28,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 200,
-            background: 'var(--glass-bg-strong)',
-            border: '1px solid var(--border-strong)',
-            borderRadius: 14,
-            padding: '12px 22px',
-            fontSize: 14,
-            fontWeight: 600,
-            color: 'var(--accent)',
-            backdropFilter: 'blur(14px)',
-            boxShadow: 'var(--glow), var(--shadow-deep)'
-          }}
-        >
-          {toast}
-        </div>
-      )}
     </>
   )
 }

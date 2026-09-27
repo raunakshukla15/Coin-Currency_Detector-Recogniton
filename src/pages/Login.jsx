@@ -128,18 +128,6 @@ export default function Login() {
               Don't have an account?{' '}
               <Link to="/signup" className="link-teal" style={{ fontWeight: 600 }}>Sign Up</Link>
             </div>
-
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ margin: '22px auto 0', display: 'flex' }}
-              onClick={() => {
-                setIdentifier('demo')
-                setPassword('demo123')
-              }}
-            >
-              Use demo credentials: demo / demo123
-            </button>
           </div>
       </div>
     </div>

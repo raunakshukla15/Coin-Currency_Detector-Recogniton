@@ -101,7 +101,7 @@ export default function Collection() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 14 }} className="stat-strip anim-fade-up">
         <StatCard icon={CoinsIcon} label="Total Items" value={total} sub={total ? 'Auto-sorted by rarity' : 'Scan to add your first item'} />
-        <StatCard icon={IndianRupee} label="Portfolio Value" value={inr(portValue)} trend="+12.4%" sub="" />
+        <StatCard icon={IndianRupee} label="Portfolio Value" value={inr(portValue)} sub={total ? 'Sum of item values' : 'No items yet'} />
         <StatCard icon={BadgeCheck} label="Verified" value={verified} sub={`${total ? Math.round((verified / total) * 100) : 0}% of collection`} />
         <StatCard icon={Heart} label="Favorites" value={favorites} sub="Marked as favorite" />
       </div>
@@ -131,7 +131,7 @@ export default function Collection() {
           </div>
           <div className="divider" style={{ margin: '16px 0 14px' }} />
           <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-            Your collection is stored locally on this device and protected by your account.
+            Your collection is saved securely with your account on the server.
           </div>
         </GlassCard>
 
@@ -230,7 +230,7 @@ export default function Collection() {
                     </div>
                   </div>
                   <div style={{ width: 150, textAlign: 'right' }}>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent)' }}>{inr(coin.price)}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent)' }}>{coin.price > 0 ? inr(coin.price) : '—'}</div>
                     <button
                       onClick={() => toggleFavorite(coin.id)}
                       aria-label="Toggle favorite"

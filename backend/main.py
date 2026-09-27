@@ -1,11 +1,48 @@
+import os
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from auth import router as auth_router
 from contact import router as contact_router
-from config import CORS_ORIGINS
+from userdata import router as userdata_router
+import config
+from config import CORS_ORIGINS, GEMINI_MODEL
+import ai
 
-app = FastAPI(title="CoinScan API", version="1.0.0")
+# --- Environment/secrets guardrails (dev warns, production refuses) ---
+_WEAK_SECRETS = {"", "dev-only-change-me", "change-me-to-a-long-random-string"}
+if config.APP_ENV == "production":
+    if config.JWT_SECRET in _WEAK_SECRETS or len(config.JWT_SECRET) < 32:
+        raise RuntimeError(
+            "Refusing to start in production with a default/weak JWT_SECRET. "
+            "Set JWT_SECRET to a long random string (>=32 chars) in the environment."
+        )
+    if not os.getenv("GEMINI_API_KEY"):
+        raise RuntimeError("Refusing to start in production without GEMINI_API_KEY.")
+elif config.JWT_SECRET in _WEAK_SECRETS:
+    print(
+        "[config] WARNING: using the default dev JWT_SECRET. "
+        "Set a strong JWT_SECRET before deploying.",
+        file=sys.stderr,
+    )
+
+# Free-tier-only guard: refuse ANY model outside the verified free allowlist
+# (dev and prod alike) so no paid model can ever be configured by accident.
+try:
+    ai._assert_free_only(GEMINI_MODEL)
+except ai.AIError as exc:
+    raise RuntimeError(str(exc)) from exc
+
+app = FastAPI(title="CoinScan API", version="1.1.0")
+
+if config.APP_ENV == "production":
+    # Production deployments must override these explicitly (see .env.example).
+    print(
+        f"[config] APP_ENV=production; CORS origins: {', '.join(CORS_ORIGINS) or '(none)'}",
+        file=sys.stderr,
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,8 +54,15 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(contact_router)
+app.include_router(userdata_router)
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "coinscan", "version": "1.0.0"}
+    return {
+        "ok": True,
+        "service": "coinscan",
+        "version": "1.0.0",
+        "ai_model": GEMINI_MODEL,
+        "ai_model_resolved": ai.LAST_RESOLVED_MODEL,
+    }

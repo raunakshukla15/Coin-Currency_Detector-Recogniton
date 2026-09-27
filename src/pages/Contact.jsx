@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Send, Star, Mail, Phone, MapPin, Users } from 'lucide-react'
+import { Send, Star, Mail, Phone, MapPin, Users, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react'
 import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
 import PageLayout from '../components/PageLayout.jsx'
 import { sendContact } from '../api.js'
 import { useAuth } from '../context/AuthContext.jsx'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const CONTACT_INFO = [
   { icon: Users, label: 'Made by', value: 'Team 5' },
@@ -17,38 +19,52 @@ export default function Contact() {
   const { user } = useAuth()
   const [rating, setRating] = useState(0)
   const [text, setText] = useState('')
-  const [sent, setSent] = useState(false)
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [sending, setSending] = useState(false)
+  const [formError, setFormError] = useState('')
+  // Outcome: null | {saved, emailSent} — three distinct states:
+  //   saved+emailSent  -> confirmation says emailed
+  //   saved+!emailSent -> confirmation says saved, email could not be sent
+  //   (failure)        -> formError, no confirmation shown
+  const [outcome, setOutcome] = useState(null)
 
   useEffect(() => {
-    if (!sent) return
-    const t = setTimeout(() => {
-      setSent(false)
-      setRating(0)
-      setText('')
-    }, 2500)
-    return () => clearTimeout(t)
-  }, [sent])
+    setName((n) => n || user?.username || '')
+    setEmail((e) => e || user?.email || '')
+  }, [user])
+
+  const resetForm = () => {
+    setOutcome(null)
+    setRating(0)
+    setText('')
+    setName(user?.username || '')
+    setEmail(user?.email || '')
+    setFormError('')
+  }
 
   const submit = async () => {
-    if (!text.trim()) return
-    try {
-      const all = JSON.parse(localStorage.getItem('coinscan_feedback') || '[]')
-      all.push({ text: text.trim(), rating, at: new Date().toISOString() })
-      localStorage.setItem('coinscan_feedback', JSON.stringify(all))
-    } catch (e) {
-      /* ignore */
+    if (!text.trim() || sending) return
+    setFormError('')
+    if (email.trim() && !EMAIL_RE.test(email.trim())) {
+      setFormError('Please enter a valid email address (or leave it empty).')
+      return
     }
+    setSending(true)
     try {
-      await sendContact({
+      const res = await sendContact({
         text: text.trim(),
         rating,
-        email: user?.email || '',
-        username: user?.username || ''
+        email: email.trim(),
+        username: name.trim()
       })
+      setOutcome({ saved: res?.saved !== false, emailSent: Boolean(res?.emailSent) })
     } catch (e) {
-      console.error('Contact submission failed (backend unreachable):', e)
+      console.error('Contact submission failed:', e)
+      setFormError(e?.message || 'Could not send your feedback. Please try again.')
+    } finally {
+      setSending(false)
     }
-    setSent(true)
   }
 
   return (
@@ -60,15 +76,31 @@ export default function Contact() {
         subtitle="Have feedback or a question about CoinScan? Reach out to the team below."
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.4fr) minmax(260px,0.6fr)', gap: 'clamp(16px, 2.2vw, 28px)', alignItems: 'start' }}>
+      <div className="contact-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.4fr) minmax(260px,0.6fr)', gap: 'clamp(16px, 2.2vw, 28px)', alignItems: 'start' }}>
         <GlassCard className="glass-interior anim-fade-up" style={{ padding: 'clamp(18px, 2vw, 26px)' }}>
-          {sent ? (
-            <div style={{ textAlign: 'center', padding: '40px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          {outcome ? (
+            <div
+              data-testid="contact-success"
+              style={{ textAlign: 'center', padding: '40px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}
+            >
               <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(0,229,195,0.12)', border: '1px solid var(--border-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Send size={22} style={{ color: 'var(--accent)' }} />
+                {outcome.emailSent ? (
+                  <CheckCircle2 size={22} style={{ color: 'var(--accent)' }} />
+                ) : (
+                  <AlertTriangle size={22} style={{ color: '#f5b450' }} />
+                )}
               </div>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>Thank you!</div>
-              <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>Your feedback has been recorded. The Team 5 reads every message.</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>
+                {outcome.emailSent ? 'Thank you!' : 'Your feedback was saved'}
+              </div>
+              <div data-testid="contact-success-detail" style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: 380 }}>
+                {outcome.emailSent
+                  ? 'Your message was saved and emailed to the team. The Team 5 reads every message.'
+                  : 'Your message was saved on the server, but email delivery to the team failed — it is stored and will be visible to the team from the database.'}
+              </div>
+              <button className="btn btn-primary btn-md" data-testid="contact-send-another" onClick={resetForm} style={{ marginTop: 8 }}>
+                <RefreshCw size={15} /> Send another message
+              </button>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -80,10 +112,12 @@ export default function Contact() {
                       key={i}
                       onClick={() => setRating(i)}
                       aria-label={`${i} stars`}
+                      data-testid={`rating-star-${i}`}
                       style={{
                         background: 'none',
                         border: 'none',
                         cursor: 'pointer',
+                        padding: 4,
                         color: i <= rating ? '#f5c86a' : 'var(--text-faint)',
                         filter: i <= rating ? 'drop-shadow(0 0 6px rgba(245,200,106,0.5))' : 'none',
                         transition: 'transform .2s ease, color .2s ease',
@@ -96,9 +130,38 @@ export default function Contact() {
                 </div>
               </div>
               <div>
-                <div className="label">Your feedback</div>
-                <textarea
+                <label className="label" htmlFor="contact-name">Name</label>
+                <input
+                  id="contact-name"
                   className="input"
+                  data-testid="contact-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Your name"
+                  maxLength={40}
+                  style={{ padding: 13 }}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="contact-email">Email</label>
+                <input
+                  id="contact-email"
+                  className="input"
+                  data-testid="contact-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  maxLength={255}
+                  style={{ padding: 13 }}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="contact-message">Your feedback</label>
+                <textarea
+                  id="contact-message"
+                  className="input"
+                  data-testid="contact-message"
                   rows={6}
                   value={text}
                   onChange={(e) => setText(e.target.value)}
@@ -106,8 +169,19 @@ export default function Contact() {
                   style={{ padding: 14, resize: 'vertical', fontFamily: 'inherit' }}
                 />
               </div>
-              <button className="btn btn-primary btn-md" onClick={submit} disabled={!text.trim()} style={{ alignSelf: 'flex-start', minWidth: 180 }}>
-                <Send size={16} /> Send Feedback
+              {formError && (
+                <div data-testid="contact-error" style={{ fontSize: 13, color: '#f5828a', background: 'rgba(245,130,138,0.08)', border: '1px solid rgba(245,130,138,0.3)', borderRadius: 12, padding: '11px 14px', lineHeight: 1.5, alignSelf: 'flex-start' }}>
+                  {formError}
+                </div>
+              )}
+              <button
+                className="btn btn-primary btn-md"
+                data-testid="contact-submit"
+                onClick={submit}
+                disabled={!text.trim() || sending}
+                style={{ alignSelf: 'flex-start', minWidth: 180 }}
+              >
+                <Send size={16} /> {sending ? 'Sending…' : 'Send Feedback'}
               </button>
             </div>
           )}

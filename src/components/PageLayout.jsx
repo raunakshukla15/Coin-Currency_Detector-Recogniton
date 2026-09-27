@@ -58,7 +58,12 @@ export default function PageLayout({ children }) {
             <TopBar />
           </div>
         )}
-        <main className="cs-main" style={{ padding: `${showTopBar ? 18 : 24}px clamp(18px, 3.4vw, 54px) 40px` }}>{children}</main>
+        <main
+          className={`cs-main ${showTopBar ? '' : 'cs-main-notop'}`}
+          style={{ padding: `${showTopBar ? 18 : 24}px clamp(18px, 3.4vw, 54px) 40px` }}
+        >
+          {children}
+        </main>
       </div>
     </>
   )

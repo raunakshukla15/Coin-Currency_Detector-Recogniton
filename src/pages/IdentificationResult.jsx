@@ -2,7 +2,8 @@ import { useMemo, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   BadgeCheck, Globe, Coins as CoinsIcon, Calendar, Layers,
-  Scale, Ruler, Landmark, TrendingUp, Gem, Share2, ScanSearch, Plus, Trash2
+  Scale, Ruler, Landmark, TrendingUp, Gem, Share2, ScanSearch, Plus, Trash2,
+  ShieldQuestion, ShieldAlert
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
@@ -10,7 +11,7 @@ import Button from '../components/Button.jsx'
 import CoinImage from '../components/CoinImage.jsx'
 import Chart from '../components/Chart.jsx'
 import PageLayout from '../components/PageLayout.jsx'
-import { coins, getCoin } from '../data/coins.js'
+import { getCoin } from '../data/coins.js'
 import { currencies, ratesToINR } from '../data/currencies.js'
 import { useCollection } from '../context/CollectionContext.jsx'
 import { rarityFromYear } from '../data/rarity.js'
@@ -41,21 +42,31 @@ const CURRENCY_ICONS = {
 
 const CURRENCY_FIELDS = ['Country', 'Denomination', 'Currency Name', 'Series', 'Year', 'Front', 'Back', 'Estimated Value', 'Rarity']
 
-const CURRENCY_DEFAULTS = {
-  name: 'Currency Note',
-  country: 'Unknown',
-  currencyName: 'Unknown',
-  denomination: 'Unknown',
-  series: 'Unknown Series',
-  year: '',
-  front: 'Unable to read',
-  back: 'Unable to read',
-  description: 'A paper currency note identified by the AI.',
-  rarity: 'Common',
-  estimatedValue: '$1 – $10',
-  match: 0
+// Neutral placeholder for fields the AI did NOT provide — we never invent
+// specs (weight/composition/etc.) or confidence for an uploaded image.
+const NEUTRAL = '—'
+
+const NEUTRAL_COIN_SPEC = {
+  denomination: NEUTRAL, composition: NEUTRAL, weight: NEUTRAL,
+  diameter: NEUTRAL, obverse: NEUTRAL, reverse: NEUTRAL, description: ''
 }
 
+const CURRENCY_DEFAULTS = {
+  name: 'Identified Note',
+  country: 'Unknown',
+  currencyName: NEUTRAL,
+  denomination: NEUTRAL,
+  series: NEUTRAL,
+  year: '',
+  front: NEUTRAL,
+  back: NEUTRAL,
+  description: '',
+  rarity: 'Common',
+  estimatedValue: null,
+  match: null
+}
+
+// Static sample series used ONLY for the decorative illustrative chart.
 const trendData = [
   { date: 'Mar', value: 22 },
   { date: 'Apr', value: 26 },
@@ -86,36 +97,42 @@ const TYPE_DEFAULTS = {
 
 function parseValueRange(coin) {
   const raw = coin.estimatedValue || coin.valueRange
-  if (Array.isArray(raw)) return raw
-  const m = String(raw || '').match(/[\d,.]+/g)
-  if (m && m.length >= 2) {
-    const low = parseFloat(m[0].replace(/,/g, ''))
-    const high = parseFloat(m[m.length - 1].replace(/,/g, ''))
-    if (!isNaN(low)) {
-      const lo = Math.round(low * 84)
-      const hi = Math.round((!isNaN(high) && high >= low ? high : low * 1.5) * 84)
-      return [lo, hi]
+  if (Array.isArray(raw) && raw.length) return raw
+  if (raw != null && raw !== '') {
+    const m = String(raw).match(/[\d,.]+/g)
+    if (m && m.length >= 2) {
+      const low = parseFloat(m[0].replace(/,/g, ''))
+      const high = parseFloat(m[m.length - 1].replace(/,/g, ''))
+      if (!isNaN(low)) {
+        const lo = Math.round(low * 84)
+        const hi = Math.round((!isNaN(high) && high >= low ? high : low * 1.5) * 84)
+        return [lo, hi]
+      }
     }
   }
-  return [
-    Math.max(50, Math.round((coin.price || 150) * 0.25)),
-    Math.max(200, Math.round((coin.price || 150) * 2))
-  ]
+  // Derived range from a reference price (local catalog items only).
+  if (typeof coin.price === 'number' && coin.price > 0) {
+    return [
+      Math.max(50, Math.round(coin.price * 0.25)),
+      Math.max(200, Math.round(coin.price * 2))
+    ]
+  }
+  // No data -> null (never fabricate a value range for an uploaded image).
+  return null
 }
 
-function enrichCoin(coin) {
+function enrichCoin(coin, { catalog = false } = {}) {
   if (!coin || Array.isArray(coin)) coin = {}
-  const d = TYPE_DEFAULTS[coin.type] || TYPE_DEFAULTS.rupee10
+  const d = catalog ? (TYPE_DEFAULTS[coin.type] || TYPE_DEFAULTS.rupee10) : NEUTRAL_COIN_SPEC
   const valueRange = parseValueRange(coin)
   return {
     ...coin,
     kind: 'coin',
-    type: coin.type || 'rupee10',
-    name: coin.name || 'Unknown Coin',
+    name: coin.name || 'Identified Coin',
     country: coin.country || 'Unknown',
     year: coin.year || '',
-    match: typeof coin.match === 'number' ? coin.match : 86,
-    rarity: rarityFromYear(coin.year),
+    match: typeof coin.match === 'number' ? coin.match : null,
+    rarity: coin.rarity || rarityFromYear(coin.year),
     denomination: coin.denomination || d.denomination,
     composition: coin.composition || d.composition,
     weight: coin.weight || d.weight,
@@ -143,16 +160,44 @@ function enrichCurrency(note) {
     front: note.front || d.front,
     back: note.back || d.back,
     description: note.description || d.description,
-    rarity: rarityFromYear(note.year),
+    rarity: note.rarity || rarityFromYear(note.year),
     estimatedValue: note.estimatedValue || d.estimatedValue,
-    match: typeof note.match === 'number' ? note.match : d.match,
-    confidence: (note.confidence || 'low').toLowerCase(),
+    match: typeof note.match === 'number' ? note.match : null,
+    confidence: (note.confidence || '').toLowerCase() || null,
     valueRange
   }
 }
 
-function enrichItem(item) {
-  return (item && item.kind === 'currency') ? enrichCurrency(item) : enrichCoin(item)
+function enrichItem(item, opts) {
+  return (item && item.kind === 'currency') ? enrichCurrency(item) : enrichCoin(item, opts)
+}
+
+// The four supported authenticity assessments. Recognition confidence (match %)
+// is ALWAYS separate — it only means "the AI recognized WHAT this is", never
+// "this % genuine". VERIFIED_AUTHENTIC is kept only to render legacy rows and
+// is treated as UNABLE_TO_VERIFY (image analysis can never verify genuineness).
+const AUTH_META = {
+  LIKELY_COUNTERFEIT: { label: 'Likely counterfeit', cls: 'badge-danger', Icon: ShieldAlert, tone: 'danger' },
+  SUSPICIOUS: { label: 'Suspicious', cls: 'badge-warn', Icon: ShieldAlert, tone: 'warn' },
+  LIKELY_GENUINE: { label: 'Likely genuine', cls: 'badge-success', Icon: BadgeCheck, tone: 'ok' },
+  UNABLE_TO_VERIFY: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion, tone: 'neutral' },
+  VERIFIED_AUTHENTIC: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion, tone: 'neutral' }
+}
+
+function authMeta(status) {
+  return AUTH_META[status] || AUTH_META.UNABLE_TO_VERIFY
+}
+
+function authenticityFor(item, overall) {
+  // Only surface an assessment when image analysis actually produced one.
+  // No uploaded-image analysis => do not invent a status.
+  const status = item?.authenticity_status || overall?.status || null
+  if (!status) return null
+  const message =
+    item?.authenticity_message ||
+    overall?.message ||
+    'Authenticity cannot be determined from this image.'
+  return { status, message }
 }
 
 function formatValue(code, inrValue) {
@@ -185,17 +230,32 @@ export default function IdentificationResult() {
   const [toast, setToast] = useState('')
 
   const coinsArr = useMemo(() => {
-    if (ident?.items?.length) return ident.items.map(enrichItem)
+    // ident.items / ident.item / ident.coins come from the uploaded-image AI
+    // analysis (or saved results) — missing fields stay neutral, never
+    // invented. ident.coinId is a local catalog reference lookup (static
+    // reference data), which may use the bundled reference defaults.
+    if (ident?.items?.length) return ident.items.map((i) => enrichItem(i))
     if (ident?.item) return [enrichItem(ident.item)]
-    if (ident?.coins?.length) return ident.coins.map(enrichItem)
-    const single = ident?.coin ? enrichItem(ident.coin) : enrichCoin(getCoin(ident?.coinId) || coins[0])
-    return [single]
+    if (ident?.coins?.length) return ident.coins.map((i) => enrichItem(i))
+    if (ident?.coin) return [enrichItem(ident.coin)]
+    if (ident?.coinId) {
+      const found = getCoin(ident.coinId)
+      return found ? [enrichCoin(found, { catalog: true })] : []
+    }
+    return []
   }, [ident])
 
   const image = ident?.image || null
+  const overallAuth = ident?.authenticity || null
   const multiple = coinsArr.length > 1
   const coinCount = coinsArr.filter((i) => i.kind !== 'currency').length
   const noteCount = coinsArr.length - coinCount
+  const hasData = coinsArr.length > 0
+
+  useEffect(() => {
+    // Direct visit with no identification in session — nothing to show.
+    if (!hasData) nav('/home', { replace: true })
+  }, [hasData, nav])
 
   useEffect(() => {
     if (toast) {
@@ -212,7 +272,9 @@ export default function IdentificationResult() {
   const share = async (coin) => {
     const payload = {
       title: 'CoinScan — Identified Coin',
-      text: `${coin.name} (${coin.country}) · ${coin.match}% match via CoinScan`,
+      text: coin.match != null
+        ? `${coin.name} (${coin.country}) · ${coin.match}% match via CoinScan`
+        : `${coin.name} (${coin.country}) · identified via CoinScan`,
       url: window.location.href
     }
     if (navigator.share) {
@@ -232,9 +294,12 @@ export default function IdentificationResult() {
     }
   }
 
+  if (!hasData) return null
+
   return (
     <PageLayout>
       <div
+        className="result-scroll"
         style={{
           height: 'calc(100vh - 124px)',
           minHeight: 620,
@@ -278,6 +343,11 @@ export default function IdentificationResult() {
           const uid = coin.id || `ident-${idx}-${coin.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
           const isCurrency = coin.kind === 'currency'
           const kindLabel = isCurrency ? 'Note' : 'Coin'
+          const auth = authenticityFor(coin, overallAuth)
+          const meta = auth ? authMeta(auth.status) : null
+          const authWarn = meta && (meta.tone === 'danger' || meta.tone === 'warn')
+          const authIconColor = meta ? (meta.tone === 'danger' ? '#f5717a' : meta.tone === 'warn' ? '#f5b450' : 'var(--accent)') : 'var(--accent)'
+          const AuthIcon = meta ? meta.Icon : null
           return (
           <div key={`${coin.name}-${idx}`} className="result-main" style={{ gap: 12, alignItems: 'stretch' }}>
             {/* LEFT — item image + all information + graph + currency values */}
@@ -297,7 +367,7 @@ export default function IdentificationResult() {
               )}
 
               {/* header — compact coin image + basic info */}
-              <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <div className="result-head" style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
                 <div
                   style={{
                     position: 'relative',
@@ -347,21 +417,72 @@ export default function IdentificationResult() {
                         })()}
                       </h2>
                       <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                        {(isCurrency ? coin.currencyName || coin.series : coin.composition || 'Bimetallic Coin').split('\n')[0]} • {coin.year}
+                        {(isCurrency ? (coin.currencyName !== NEUTRAL ? coin.currencyName : coin.series) : coin.composition).split('\n')[0]}
+                        {coin.year ? ` • ${coin.year}` : ''}
                       </div>
-                      <span className="badge badge-success" style={{ marginTop: 8 }}>
-                        <BadgeCheck size={11} strokeWidth={2.6} /> AI Identified · {coin.match}% Match
-                      </span>
+                      {coin.match != null ? (
+                        <span className="badge badge-success" style={{ marginTop: 8 }}>
+                          <BadgeCheck size={11} strokeWidth={2.6} /> AI Identified · {coin.match}% Match
+                        </span>
+                      ) : (
+                        <span className="badge badge-success" style={{ marginTop: 8 }}>
+                          <BadgeCheck size={11} strokeWidth={2.6} /> AI Identified
+                        </span>
+                      )}
+                      {coin.match != null && (
+                        <div style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 4 }}>
+                          {coin.match}% is recognition confidence (what the AI thinks this is) — not proof of genuineness.
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
-                    {coin.description}
-                  </p>
+                  {/* Authenticity: only when image analysis produced a status */}
+                  {auth && meta && AuthIcon && (
+                  <div
+                    className="glass-card-soft"
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      borderRadius: 12,
+                      display: 'flex',
+                      gap: 9,
+                      alignItems: 'flex-start',
+                      border:
+                        meta.tone === 'danger'
+                          ? '1px solid rgba(245,113,122,0.55)'
+                          : authWarn
+                            ? '1px solid rgba(245,180,80,0.45)'
+                            : '1px solid var(--border-faint)',
+                      background:
+                        meta.tone === 'danger'
+                          ? 'rgba(245,113,122,0.06)'
+                          : undefined
+                    }}
+                  >
+                    <AuthIcon size={15} style={{ color: authIconColor, flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ minWidth: 0 }}>
+                      <span
+                        className={`badge ${meta.cls}`}
+                        style={{ marginBottom: 4, display: 'inline-flex' }}
+                      >
+                        Authenticity: {meta.label}
+                      </span>
+                      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55, marginTop: 4 }}>
+                        {auth.message}
+                      </div>
+                    </div>
+                  </div>
+                  )}
+                  {coin.description ? (
+                    <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
+                      {coin.description}
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
               {/* all information */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+              <div className="result-facts" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
                 {(isCurrency ? CURRENCY_FIELDS : ['Country', 'Denomination', 'Year', 'Composition', 'Weight', 'Diameter', 'Obverse', 'Estimated Value', 'Rarity']).map((key) => {
                   const Icon = isCurrency ? CURRENCY_ICONS[key] : ICONS[key]
                   const label =
@@ -376,7 +497,7 @@ export default function IdentificationResult() {
                     key === 'Obverse' ? coin.obverse :
                     key === 'Front' ? coin.front :
                     key === 'Back' ? coin.back :
-                    key === 'Estimated Value' ? `₹${coin.valueRange?.[0] ?? 0} – ₹${coin.valueRange?.[1] ?? 0}` :
+                    key === 'Estimated Value' ? (coin.valueRange ? `₹${coin.valueRange[0]} – ₹${coin.valueRange[1]}` : NEUTRAL) :
                     coin.rarity || 'Common'
                   return (
                     <div
@@ -411,16 +532,16 @@ export default function IdentificationResult() {
                 })}
               </div>
 
-              {/* graph */}
+              {/* graph — decorative sample, clearly labelled (not live data) */}
               <div style={{ paddingTop: 2 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                  <span className="eyebrow" style={{ fontSize: 10 }}>Market Insights</span>
+                  <span className="eyebrow" style={{ fontSize: 10 }}>Market Insights · Illustrative</span>
                 </div>
                 <div className="chart-fill" style={{ width: '100%', aspectRatio: '720 / 260', minHeight: 110, overflow: 'hidden' }}>
-                  <Chart data={trendData} endLabel={`₹${coin.valueRange?.[1] ?? 150}`} />
+                  <Chart data={trendData} endLabel={coin.valueRange ? `₹${coin.valueRange[1]}` : null} />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--accent)', fontWeight: 600, marginTop: 4 }}>
-                  <TrendingUp size={14} /> +38% 12-month appreciation
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text-muted)', fontWeight: 600, marginTop: 4 }}>
+                  <TrendingUp size={14} style={{ color: 'var(--accent)' }} /> Sample trend data — not live market prices
                 </div>
               </div>
             </GlassCard>
@@ -479,7 +600,7 @@ export default function IdentificationResult() {
                 </div>
                 {['INR', 'USD', 'JPY', 'CNY', 'EUR', 'GBP', 'AED', 'SGD', 'HKD', 'AUD', 'CAD', 'CHF', 'KRW', 'THB', 'SAR'].map((code) => {
                   const c = currencies[code]
-                  const val = (coin.valueRange?.[1] ?? 150) * (ratesToINR[code] ?? 0)
+                  const base = coin.valueRange ? coin.valueRange[1] : null
                   return (
                     <div key={code} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '2px 0' }}>
                       <span style={{ width: 17, fontSize: 14, flexShrink: 0 }}>{c.flag}</span>
@@ -487,7 +608,7 @@ export default function IdentificationResult() {
                         {c.symbol} {c.code}
                       </span>
                       <span style={{ fontSize: 12, fontWeight: 800, color: code === 'INR' ? 'var(--accent)' : 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
-                        {formatValue(code, coin.valueRange?.[1] ?? 150)}
+                        {base != null ? formatValue(code, base) : NEUTRAL}
                       </span>
                     </div>
                   )

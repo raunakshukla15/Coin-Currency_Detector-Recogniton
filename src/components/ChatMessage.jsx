@@ -1,5 +1,30 @@
 import { Bot, User } from 'lucide-react'
 
+// The chat bubble is plain text (whiteSpace: pre-line), so any raw markdown
+// markers the model ever produced would show up literally. Strip them at
+// render time so messages — including ones saved earlier — always display
+// as clean, readable text. Layout, colors and sizing are untouched.
+function plainText(text) {
+  if (typeof text !== 'string' || !text) return text
+  let t = text
+    .replace(/```[^\n]*\n?/g, '\n')
+    .replace(/```/g, '')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/\*\*\*([^*\n]+)\*\*\*/g, '$1')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/(^|[\s(])_([^_\n]+)_/g, '$1$2')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^(\s*)\*(?=\s)/gm, '$1•')
+    .replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return t
+}
+
 export default function ChatMessage({ message }) {
   const isUser = message.role === 'user'
   return (
@@ -37,10 +62,12 @@ export default function ChatMessage({ message }) {
             color: 'var(--text-secondary)',
             borderTopLeftRadius: isUser ? 14 : 4,
             whiteSpace: 'pre-line',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
             maxWidth: '100%'
           }}
         >
-          {message.content}
+          {plainText(message.content)}
           {message.image && (
             <div style={{ marginTop: 10 }}>
               <img

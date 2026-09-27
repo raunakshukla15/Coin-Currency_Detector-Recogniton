@@ -29,6 +29,11 @@ export default function CurrencyConverter() {
   const sym = currencies[from]?.symbol || ''
   const toSym = currencies[to]?.symbol || ''
 
+  const setAmountSafe = (raw) => {
+    const n = Number(raw)
+    setAmount(Number.isFinite(n) && n > 0 ? n : 0)
+  }
+
   const selectFrom = (code) => {
     if (code === to) setTo(from)
     setFrom(code)
@@ -53,6 +58,7 @@ export default function CurrencyConverter() {
   return (
     <PageLayout>
       <div
+        className="converter-page"
         style={{
           height: 'calc(100vh - 70px)',
           minHeight: 520,
@@ -77,7 +83,7 @@ export default function CurrencyConverter() {
             className="glass-interior anim-fade-up"
             style={{ padding: 'clamp(16px, 1.8vw, 24px)', display: 'flex', flexDirection: 'column', minHeight: 0 }}
           >
-            <div className="eyebrow" style={{ marginBottom: 8 }}>Trend &amp; Insights</div>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>Trend &amp; Insights · Illustrative</div>
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div>
@@ -104,19 +110,22 @@ export default function CurrencyConverter() {
                 }}
               >
                 {positive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                {positive ? '+' : ''}{dailyChange.toFixed(2)}% today
+                {positive ? '+' : ''}{dailyChange.toFixed(2)}% (sample)
               </div>
             </div>
 
             <div style={{ flex: 1, minHeight: 170, marginTop: 14 }} className="chart-fill">
               <Chart data={trend} endLabel={currentRate.toFixed(4)} />
             </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>
+              Illustrative sample trend derived from bundled reference rates — not live market data.
+            </div>
 
             <div className="divider-solid" style={{ margin: '14px 0' }} />
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+            <div className="conv-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
               {[
-                ['7-Day Change', `${positive ? '+' : ''}${weekChange.toFixed(2)}%`, positive ? 'var(--accent)' : '#f5828a'],
+                ['7-Day Change (sample)', `${positive ? '+' : ''}${weekChange.toFixed(2)}%`, positive ? 'var(--accent)' : '#f5828a'],
                 ['Period High', high.toFixed(4), 'var(--text-primary)'],
                 ['Period Low', low.toFixed(4), 'var(--text-secondary)']
               ].map(([label, value, color]) => (
@@ -154,8 +163,11 @@ export default function CurrencyConverter() {
               <input
                 className="input"
                 type="number"
+                min="0"
+                step="any"
+                data-testid="converter-amount"
                 value={amount || ''}
-                onChange={(e) => setAmount(Number(e.target.value))}
+                onChange={(e) => setAmountSafe(e.target.value)}
                 placeholder="0.00"
                 style={{ padding: '14px 16px 14px 48px', fontSize: 24, fontWeight: 800, height: 60, borderRadius: 16, fontVariantNumeric: 'tabular-nums' }}
               />
@@ -254,7 +266,7 @@ export default function CurrencyConverter() {
                 1 {from} = <strong style={{ color: 'var(--text-secondary)' }}>{currentRate.toFixed(4)} {to}</strong>
                 <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 4 }}>
                   <span className="kbd live-dot" style={{ display: 'inline-block', marginRight: 6 }} />
-                  Live rates · Updated just now
+                  Reference rates · bundled with the app
                 </div>
               </div>
               <button

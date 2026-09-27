@@ -1,33 +1,44 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { History, Coins, ExternalLink, Trash2, ScanSearch, Layers } from 'lucide-react'
+import { History, Coins, ExternalLink, Trash2, ScanSearch, Layers, ShieldQuestion, ShieldAlert, BadgeCheck } from 'lucide-react'
 import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
 import Button from '../components/Button.jsx'
 import PageLayout from '../components/PageLayout.jsx'
+import { fetchScans, deleteScan, clearScans, fetchImageDataUrl } from '../api.js'
 
-const HISTORY_KEY = 'coinscan_history'
-
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    if (raw) {
-      const list = JSON.parse(raw)
-      if (Array.isArray(list)) return list
-    }
-  } catch (e) {
-    /* ignore */
-  }
-  return []
+// Same four authenticity assessments as the result page (legacy
+// VERIFIED_AUTHENTIC rows render as unverified).
+const AUTH_META = {
+  LIKELY_COUNTERFEIT: { label: 'Likely counterfeit', cls: 'badge-danger', Icon: ShieldAlert },
+  SUSPICIOUS: { label: 'Suspicious', cls: 'badge-warn', Icon: ShieldAlert },
+  LIKELY_GENUINE: { label: 'Likely genuine', cls: 'badge-success', Icon: BadgeCheck },
+  UNABLE_TO_VERIFY: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion },
+  VERIFIED_AUTHENTIC: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion }
 }
 
-function persistHistory(list) {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(list))
-    window.dispatchEvent(new Event('coinscan-history'))
-  } catch (e) {
-    /* ignore */
-  }
+function authMeta(status) {
+  return AUTH_META[status] || AUTH_META.UNABLE_TO_VERIFY
+}
+
+async function loadFromServer() {
+  const { scans } = await fetchScans()
+  const list = Array.isArray(scans) ? scans : []
+  return await Promise.all(
+    list.map(async (s) => {
+      let image = null
+      if (s.imageId) image = await fetchImageDataUrl(s.imageId)
+      return {
+        id: String(s.id),
+        name: s.name,
+        image,
+        items: s.items,
+        timestamp: s.timestamp,
+        confidence: s.confidence,
+        authenticity: { status: s.authenticityStatus, message: s.authenticityMessage }
+      }
+    })
+  )
 }
 
 function timeAgo(iso) {
@@ -50,20 +61,29 @@ function itemCount(entry) {
 
 export default function HistoryPage() {
   const nav = useNavigate()
-  const [history, setHistory] = useState(loadHistory)
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
   const [confirmClear, setConfirmClear] = useState(false)
   const [toast, setToast] = useState('')
 
-  useEffect(() => {
-    const refresh = () => {
-      setHistory(loadHistory())
-      setConfirmClear(false)
+  const refresh = async (keepConfirm = false) => {
+    try {
+      const list = await loadFromServer()
+      setHistory(list)
+    } catch (e) {
+      console.warn('Unable to load scan history:', e?.message || e)
+      setHistory([])
+    } finally {
+      setLoading(false)
+      if (!keepConfirm) setConfirmClear(false)
     }
+  }
+
+  useEffect(() => {
+    refresh()
     window.addEventListener('coinscan-history', refresh)
-    window.addEventListener('storage', refresh)
     return () => {
       window.removeEventListener('coinscan-history', refresh)
-      window.removeEventListener('storage', refresh)
     }
   }, [])
 
@@ -78,7 +98,11 @@ export default function HistoryPage() {
     try {
       sessionStorage.setItem(
         'coinscan_lastident',
-        JSON.stringify({ items: entry.items, image: entry.image || null })
+        JSON.stringify({
+          items: entry.items,
+          image: entry.image || null,
+          authenticity: entry.authenticity || null
+        })
       )
     } catch (e) {
       /* ignore */
@@ -86,22 +110,28 @@ export default function HistoryPage() {
     nav('/result')
   }
 
-  const removeEntry = (id) => {
-    const next = history.filter((e) => e.id !== id)
-    setHistory(next)
-    persistHistory(next)
-    setToast('Entry removed from upload history')
+  const removeEntry = async (id) => {
+    try {
+      await deleteScan(Number(id))
+      await refresh()
+      setToast('Entry removed from your upload history')
+    } catch (e) {
+      setToast('Unable to remove entry')
+    }
   }
 
-  const clearAll = () => {
+  const clearAll = async () => {
     if (!confirmClear) {
       setConfirmClear(true)
       return
     }
-    setHistory([])
-    persistHistory([])
-    setConfirmClear(false)
-    setToast('Upload history cleared')
+    try {
+      await clearScans()
+      await refresh()
+      setToast('Upload history cleared')
+    } catch (e) {
+      setToast('Unable to clear history')
+    }
   }
 
   return (
@@ -120,7 +150,11 @@ export default function HistoryPage() {
         }
       />
 
-      {history.length === 0 ? (
+      {loading ? (
+        <GlassCard className="glass-interior" style={{ padding: 'clamp(28px, 4vw, 56px)', textAlign: 'center', color: 'var(--text-muted)' }}>
+          Loading your scan history…
+        </GlassCard>
+      ) : history.length === 0 ? (
         <GlassCard className="glass-interior anim-fade-up" style={{ padding: 'clamp(28px, 4vw, 56px)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
           <div
             style={{
@@ -155,7 +189,7 @@ export default function HistoryPage() {
             <Layers size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
             <span>
               <strong style={{ color: 'var(--accent)' }}>{history.length} upload{history.length === 1 ? '' : 's'}</strong>
-              &nbsp;stored on this device — click any card to reopen its full result.
+              &nbsp;saved to your account — click any card to reopen its full result.
             </span>
           </div>
 
@@ -186,7 +220,7 @@ export default function HistoryPage() {
                   )}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {entry.name || 'Identified Coin'}
@@ -196,9 +230,25 @@ export default function HistoryPage() {
                       {itemCount(entry) > 1 ? ` · ${itemCount(entry)} items` : ''}
                     </div>
                   </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {entry.authenticity?.status ? (() => {
+                    const meta = authMeta(entry.authenticity.status)
+                    const ListIcon = meta.Icon
+                    return (
+                      <span
+                        className={`badge ${meta.cls}`}
+                        title={entry.authenticity?.message || ''}
+                        style={{ flexShrink: 0 }}
+                      >
+                        <ListIcon size={11} />
+                        {meta.label}
+                      </span>
+                    )
+                  })() : null}
                   <span className="badge badge-success" style={{ flexShrink: 0 }}>
                     {itemCount(entry)} item{itemCount(entry) === 1 ? '' : 's'}
                   </span>
+                </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: 8 }}>

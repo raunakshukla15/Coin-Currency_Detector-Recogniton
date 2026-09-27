@@ -5,28 +5,16 @@ import PageHeader from '../components/PageHeader.jsx'
 import Button from '../components/Button.jsx'
 import Modal from '../components/Modal.jsx'
 import PageLayout from '../components/PageLayout.jsx'
-import { identifyItems } from '../api.js'
+import { identifyItems, saveScan } from '../api.js'
 
-const HISTORY_KEY = 'coinscan_history'
-
-function saveHistory(items, image) {
+async function persistScan(items, image, authenticity) {
+  // Save to the logged-in user's server-side history (MySQL). Failure must
+  // not block viewing the result — history syncs again on the next scan.
   try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    const list = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(list)) return
-    const first = Array.isArray(items) ? items[0] : items
-    const name = first?.name || 'Identified Coin'
-    list.unshift({
-      id: `${Date.now()}`,
-      name,
-      image: image || null,
-      items,
-      timestamp: new Date().toISOString()
-    })
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 20)))
+    await saveScan({ items, image: image || null, authenticity: authenticity || null })
     window.dispatchEvent(new Event('coinscan-history'))
   } catch (e) {
-    /* ignore */
+    console.warn('Scan history could not be saved:', e?.message || e)
   }
 }
 
@@ -38,9 +26,11 @@ export default function Home() {
   const [fileName, setFileName] = useState('')
   const [scanning, setScanning] = useState(false)
   const [camOpen, setCamOpen] = useState(false)
+  const [camReady, setCamReady] = useState(false)
   const [camError, setCamError] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [scanError, setScanError] = useState('')
+  const [fileError, setFileError] = useState('')
   const streamRef = useRef(null)
 
   const stopStream = () => {
@@ -49,12 +39,18 @@ export default function Home() {
       streamRef.current = null
     }
     setCamOpen(false)
+    setCamReady(false)
   }
 
   useEffect(() => () => stopStream(), [])
 
   const onPick = (file) => {
-    if (!file || !file.type.startsWith('image/')) return
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setFileError(`"${file.name || 'That file'}" is not an image. Please choose a JPG, PNG, or WEBP photo of a coin or banknote.`)
+      return
+    }
+    setFileError('')
     const reader = new FileReader()
     reader.onload = () => {
       setPreview(reader.result)
@@ -67,6 +63,7 @@ export default function Home() {
 
   const openCamera = async () => {
     setCamError('')
+    setCamReady(false)
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCamError('Camera is not supported in this browser. Please try the upload option instead.')
       return
@@ -106,19 +103,30 @@ export default function Home() {
     setScanning(true)
     setScanError('')
     try {
-      const items = await identifyItems(preview)
-      // The AI returns a generic "Unidentified Coin" placeholder when it can't
-      // parse anything — treat that as a real failure so the user retries
-      // instead of landing on an empty result page.
+      const { items, authenticity } = await identifyItems(preview)
+      // Image was uploaded and sent to the vision API. If it found no
+      // physical coin/banknote, there is no identification and no
+      // authenticity assessment — tell the user instead of inventing one.
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new Error(
+          'This is not a supported currency/coin image. Please upload a clear photo of a coin or banknote.'
+        )
+      }
+      // Legacy placeholder from older API versions — treat as failure.
       const onlyFallback =
-        Array.isArray(items) &&
         items.length === 1 &&
         (items[0]?.name === 'Unidentified Coin' || items[0]?.match === 0)
       if (onlyFallback) {
-        throw new Error(items[0]?.description || 'Unable to identify the image. Please try another, clearer photo.')
+        throw new Error(
+          items[0]?.description ||
+            'This is not a supported currency/coin image. Please upload a clear photo of a coin or banknote.'
+        )
       }
-      saveHistory(items, preview)
-      sessionStorage.setItem('coinscan_lastident', JSON.stringify({ items, image: preview || null }))
+      await persistScan(items, preview, authenticity)
+      sessionStorage.setItem(
+        'coinscan_lastident',
+        JSON.stringify({ items, image: preview || null, authenticity: authenticity || null })
+      )
       nav('/result')
     } catch (e) {
       console.error(e)
@@ -285,6 +293,7 @@ export default function Home() {
           </div>
 
           <div
+            className="scan-actions"
             style={{
               display: 'flex',
               gap: 12,
@@ -357,6 +366,20 @@ export default function Home() {
         </Modal>
       )}
 
+      {fileError && (
+        <Modal open onClose={() => setFileError('')} title="Unsupported File" width={480}>
+          <p style={{ fontSize: 14.5, color: 'var(--text-secondary)', lineHeight: 1.7, margin: '0 0 20px' }}>
+            {fileError}
+          </p>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+            <Button variant="ghost" size="md" onClick={() => setFileError('')}>Close</Button>
+            <Button variant="primary" size="md" onClick={() => { setFileError(''); fileRef.current?.click() }}>
+              <Upload size={16} /> Choose Image
+            </Button>
+          </div>
+        </Modal>
+      )}
+
       {camError && (
         <Modal open onClose={() => setCamError('')} title="Camera Unavailable" width={480}>
           <p style={{ fontSize: 14.5, color: 'var(--text-secondary)', lineHeight: 1.7, margin: '0 0 20px' }}>
@@ -378,6 +401,7 @@ export default function Home() {
               ref={videoRef}
               playsInline
               muted
+              onCanPlay={() => setCamReady(true)}
               style={{ width: '100%', maxHeight: 480, objectFit: 'contain', display: 'block' }}
             />
             <div style={{ position: 'absolute', inset: '12%', border: '1.5px dashed rgba(0,229,195,0.7)', borderRadius: 9999, pointerEvents: 'none' }} />
@@ -387,8 +411,14 @@ export default function Home() {
             <Button variant="ghost" size="md" onClick={stopStream}>
               <X size={16} /> Cancel
             </Button>
-            <Button variant="primary" size="md" onClick={capture}>
-              <Camera size={16} /> Capture
+            <Button
+              variant="primary"
+              size="md"
+              onClick={capture}
+              disabled={!camReady}
+              style={{ minWidth: 140, opacity: camReady ? 1 : 0.55, cursor: camReady ? 'pointer' : 'not-allowed' }}
+            >
+              <Camera size={16} /> {camReady ? 'Capture' : 'Starting camera…'}
             </Button>
           </div>
         </div>

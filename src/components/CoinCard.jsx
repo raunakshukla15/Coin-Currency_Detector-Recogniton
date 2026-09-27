@@ -116,7 +116,9 @@ export default function CoinCard({
             Price
           </div>
           <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent)', letterSpacing: '-0.01em' }}>
-            {coin.priceDisplay || `₹${Number(coin.price).toLocaleString('en-IN')}`}
+            {coin.priceDisplay || (typeof coin.price === 'number' && coin.price > 0
+              ? `₹${Number(coin.price).toLocaleString('en-IN')}`
+              : '—')}
           </div>
         </div>
       </div>

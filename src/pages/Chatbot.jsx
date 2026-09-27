@@ -1,13 +1,23 @@
 import { useRef, useState, useEffect } from 'react'
-import { Send, ImagePlus, Bot, Plus, Trash2, MessageSquareText } from 'lucide-react'
+import { Send, ImagePlus, Bot, Plus, Trash2, MessageSquareText, AlertTriangle } from 'lucide-react'
 import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
 import ChatMessage from '../components/ChatMessage.jsx'
 import PageLayout from '../components/PageLayout.jsx'
-import { chatCompletion } from '../api.js'
+import {
+  chatCompletion,
+  fetchChats,
+  createChat,
+  fetchMessages,
+  saveMessage,
+  deleteChat as apiDeleteChat,
+  isAuthenticated,
+  isBackendError
+} from '../api.js'
 
-const CHAT_KEY = 'coinscan_chats'
-const LEGACY_KEY = 'coinscan_chat'
+// Max accepted attachment size (raw file). Larger files are rejected before
+// being read into memory; chatCompletion downscales for the AI request.
+const MAX_IMAGE_FILE_BYTES = 4 * 1024 * 1024
 
 function titleFromContent(content, image) {
   const c = typeof content === 'string' ? content.trim() : ''
@@ -16,40 +26,6 @@ function titleFromContent(content, image) {
     return oneLine.length > 42 ? `${oneLine.slice(0, 42).trim()}…` : oneLine
   }
   return image ? 'Coin photo question' : 'New chat'
-}
-
-function loadChats() {
-  try {
-    const raw = localStorage.getItem(CHAT_KEY)
-    if (raw) {
-      const chats = JSON.parse(raw)
-      if (Array.isArray(chats)) {
-        return { chats, activeId: chats[0]?.id || null }
-      }
-    }
-  } catch (e) {
-    /* ignore */
-  }
-  try {
-    const legacy = localStorage.getItem(LEGACY_KEY)
-    if (legacy) {
-      const msgs = JSON.parse(legacy)
-      if (Array.isArray(msgs) && msgs.length) {
-        localStorage.removeItem(LEGACY_KEY)
-        const first = msgs.find((m) => m.role === 'user')
-        const chat = {
-          id: `chat_${Date.now()}`,
-          title: titleFromContent(first?.content, first?.image),
-          messages: msgs,
-          createdAt: new Date().toISOString()
-        }
-        return { chats: [chat], activeId: chat.id }
-      }
-    }
-  } catch (e) {
-    /* ignore */
-  }
-  return { chats: [], activeId: null }
 }
 
 function formatTime(iso) {
@@ -71,78 +47,6 @@ function formatTime(iso) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function respond(q) {
-  const t = q.toLowerCase()
-
-  if (t.includes('1939') && (t.includes('nickel') || t.includes('coin'))) {
-    return {
-      title: 'The 1939 Nickel',
-      text:
-        `The 1939 Jefferson nickel is a common-date U.S. coin, so most examples are worth only face value (about ₹40–₹120).\n\nHowever — the 1939-D "reverse strike" variety and the 1939-S can carry modest premiums:\n\n• 1939 (Philadelphia) — ₹100–₹500 in typical grades\n• 1939-D — ₹500–₹3,000 depending on condition\n• 1939-S — similar to the D\n\nHigh-grade specimens (MS66 or better) can reach several hundred dollars at auction because the 1939 issue frequently arrives weakly struck. Look for sharp full steps on the Monticello reverse — coins with "Full Steps" command the highest premiums.`
-    }
-  }
-  if (t.includes('clean') || t.includes('silver')) {
-    return {
-      title: 'Safe Silver Coin Care',
-      text:
-        `Cleaning is the fastest way to destroy a coin's value. My best advice: almost never clean coins, and never use:\n\n• Abrasive polishes or toothpaste — they remove metal\n• Acid dips or ultrasonic cleaners for collectible pieces\n• Harsh rubbing that creates hairlines\n\nIf you must act:\n\n1. Soak in warm distilled water with a drop of pH-neutral dish soap\n2. Gently swish for a few minutes, then rinse\n3. Pat dry with a soft microfiber cloth\n\nLeave original "tone" intact — collectors pay premiums for natural, attractive toning. If a coin is corroded or valuable, a professional conservationist is the safest route.`
-    }
-  }
-  if (t.includes('12-sided') || (t.includes('pound') && t.length < 40) || t.includes('side')) {
-    return {
-      title: 'The 12-Sided £1 Coin',
-      text:
-        `The United Kingdom's 12-sided £1 coin (introduced 2017) is one of the world's most secure circulation coins. Its security features:\n\n1. 12 sides — instantly distinguishable by touch and more difficult to counterfeit than circles\n2. Bi-metallic construction — a gold-coloured nickel-brass outer ring with a silver cupro-nickel inner disc\n3. Milled edges with "engrailing" — alternating smooth and milled edge segments\n4. Hidden features — a hologram-like image that changes between "£" and "1" when viewed from different angles\n5. Lettering on the edge — "DECUS ET TUTAMEN" inscribed into the metal\n\nIt was the largest coin redesign in UK circulating history.`
-    }
-  }
-  if (t.includes('mint mark')) {
-    return {
-      title: 'Mint Marks Explained',
-      text:
-        `A mint mark is a small letter or symbol that identifies which facility struck a coin. It's usually tiny and easy to miss.\n\nCommon locations:\n\n• US coins — below the date on the obverse (D = Denver, S = San Francisco, P = Philadelphia)\n• Indian coins under Britain — below the date: C (Calcutta), B (Bombay), M (Madras)\n• Modern India — a small diamond, or "★"/"M" marks for Hyderabad and Kolkata on commemoratives\n\nWhy it matters: mint marks often determine rarity. For example, a balanced-date Indian series coin with a South African watermark mint mark can be dramatically rarer — and worth many multiples of a common equivalent.`
-    }
-  }
-  if (t.includes('market value') || t.includes('valuable') || t.includes('worth')) {
-    return {
-      title: 'What Drives Coin Value?',
-      text:
-        `Coin value is governed by five pillars, in roughly this order of importance:\n\n1. Rarity — how many survive and how many are available for sale\n2. Condition / grade — the higher the grade, the steeper the price curve\n3. Demand — collector fashion, key dates, and iconic designs\n4. Metal content — bullion value forms the "floor"\n5. Provenance — famous collections and history add premium\n\nPractical guidance: check mintage figures, compare recent Certified Auction results (not asking prices), and be wary of "rare" coins sold below market — a bargain price is often a sign of a counterfeit or altered coin.`
-    }
-  }
-  if (t.includes('grade') || t.includes('grading')) {
-    return {
-      title: 'How Grading Works',
-      text:
-        `Grading describes a coin's condition on the Sheldon scale (1–70):\n\n• MS/PR 60-70 — Mint State / Proof, no circulation wear\n• AU 50-58 — About Uncirculated, wear on highest points only\n• EF/XF 40-45 — Extremely Fine, light wear, all details bold\n• VF 20-35 — Very Fine, moderate wear, major features clear\n• F 12-15 — Fine, considerable wear\n• VG 8-10 — Very Good, outline of design\n• G 4-6 — Good, heavily worn\n\nStep-by-step approach:\n\n1. Photograph both faces under even light\n2. Examine the highest points (hair, feathers, cheek) for wear\n3. Compare against known photos at each grade\n4. Measure strike, luster, and eye appeal\n\nFor serious value, rely on professional services (NGC, PCGS, or the service your platform supports). My estimates assume the described grade.`
-    }
-  }
-  if (t.includes('proof') || t.includes('circulation')) {
-    return {
-      title: 'Proof vs Circulation Coins',
-      text:
-        `The difference is manufacturing, not denomination:\n\n• Proof coins — struck twice with specially polished dies on burnished planchets. Mirrored fields, frosted devices, packaged individually. Made for collectors.\n\n• Circulation coins — struck once, mass-produced for everyday use. Luster is more uniform and surfaces show mint-made marks.\n\nHow to tell: proofs have razor-sharp detail and a mirror finish; circulating coins show a satin, textured surface. Many mints sell both versions of the same design. Proofs almost always carry a premium — but note that proof status alone doesn't guarantee value; rarity and grade still rule.`
-    }
-  }
-  if (t.includes('error') || t.includes('mint') || t.includes('strike')) {
-    return {
-      title: 'Minting Errors & Varieties',
-      text:
-        `Mint errors are among the most collectible modern coins. The main families:\n\n1. Die errors — cracks, cuds, doubled dies (e.g., the famous 1955 double-die Lincoln)\n2. Planchet errors — wrong metal, clipped or off-center planchets\n3. Strike errors — off-center strikes, broadstrikes, brockages, die caps\n4. Edge errors — missing or double lettering\n\nA genuinely struck-through or off-center error can fetch 10–100× face value. To verify: measure the degree of error (percentage off-center matters), confirm it isn't post-mint damage, and check for official certification.`
-    }
-  }
-  if (t.includes('hii') || t.includes('hi ') || t.includes('hello') || t.includes('hey') || t.includes('start')) {
-    return {
-      title: 'Hello!',
-      text: `Great to see you. Ask me about any coin — origin, history, market value, grading, mint marks, or errors. You can also upload a photo from the identification tab and I'll help decode what you're holding.`
-    }
-  }
-  return {
-    title: 'Here is what I found',
-    text:
-      `Great question! Based on what you described, here's how to approach it:\n\n1. Identify the coin's origin — check the language, inscriptions, and design motifs\n2. Confirm the denomination and year from the legends\n3. Assess condition against standard grading descriptions\n4. Compare against recent verified sale results rather than listed prices\n\nIf you can share the country, approximate year, or a photo, I can give a much more specific answer. You can upload an image from the Home tab and get an instant AI identification.`
-  }
-}
-
 const INTRO = [
   { n: 1, title: 'Origin & country', desc: 'Read inscriptions and language to determine where the coin was struck.' },
   { n: 2, title: 'Mint year', desc: 'Locate the date on either face — often beneath the main design.' },
@@ -152,99 +56,227 @@ const INTRO = [
 ]
 
 export default function Chatbot() {
-  const [{ chats, activeId }, setState] = useState(loadChats)
+  const [chats, setChats] = useState([])
+  const [activeId, setActiveId] = useState(null)
+  const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
   const [attach, setAttach] = useState(null)
+  const [attachError, setAttachError] = useState('')
   const fileRef = useRef(null)
   const endRef = useRef(null)
 
-  const activeChat = chats.find((c) => c.id === activeId) || null
-  const messages = activeChat?.messages || []
-  const showIntro = !activeChat || messages.length === 0
+  const showIntro = !activeId || messages.length === 0
 
+  // Load this user's conversations from the server (MySQL, per user_id).
   useEffect(() => {
-    try {
-      localStorage.setItem(CHAT_KEY, JSON.stringify(chats))
-    } catch (e) {
-      /* ignore */
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (isAuthenticated()) {
+          const { chats: serverChats } = await fetchChats()
+          if (!cancelled) setChats(Array.isArray(serverChats) ? serverChats : [])
+        }
+      } catch (e) {
+        console.warn('Unable to load chat history:', e?.message || e)
+      } finally {
+        if (!cancelled) setChats((c) => c)
+      }
+    })()
+    return () => {
+      cancelled = true
     }
-  }, [chats])
+  }, [])
 
   useEffect(() => {
+    // Only follow the conversation — never auto-scroll past the intro panel.
+    if (messages.length === 0 && !typing) return
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [messages, typing])
 
   const newChat = () => {
-    setState((s) => ({ ...s, activeId: null }))
+    setActiveId(null)
+    setMessages([])
     setInput('')
     setAttach(null)
+    setAttachError('')
   }
 
-  const openChat = (id) => {
-    setState((s) => ({ ...s, activeId: id }))
+  const openChat = async (id) => {
+    if (id === activeId) return
+    setActiveId(id)
+    setMessages([])
     setInput('')
     setAttach(null)
+    setAttachError('')
+    try {
+      const res = await fetchMessages(id)
+      const loaded = (res.messages || []).map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        image: m.image || null,
+        title: m.role === 'assistant' ? 'CoinScan AI' : undefined
+      }))
+      setMessages(loaded)
+    } catch (e) {
+      console.warn('Unable to load conversation:', e?.message || e)
+    }
   }
 
-  const deleteChat = (id) => {
-    setState((s) => {
-      let nextActive = s.activeId
-      if (s.activeId === id) nextActive = null
-      return { chats: s.chats.filter((c) => c.id !== id), activeId: nextActive }
-    })
-  }
-
-  const appendMessage = (chatId, msg) => {
-    setState((s) => {
-      const exists = s.chats.some((c) => c.id === chatId)
-      if (!exists) {
-        const chat = {
-          id: chatId,
-          title: titleFromContent(msg.content, msg.image),
-          messages: [msg],
-          createdAt: new Date().toISOString()
-        }
-        return { chats: [chat, ...s.chats], activeId: chatId }
-      }
-      return {
-        ...s,
-        chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: [...c.messages, msg] } : c))
-      }
-    })
+  const deleteChat = async (id) => {
+    const isActive = activeId === id
+    try {
+      if (isAuthenticated()) await apiDeleteChat(id)
+    } catch (e) {
+      console.warn('Unable to delete conversation:', e?.message || e)
+    }
+    setChats((c) => c.filter((x) => x.id !== id))
+    if (isActive) {
+      setActiveId(null)
+      setMessages([])
+    }
   }
 
   const send = async (text = input, image = attach) => {
     const content = text.trim()
     if ((!content && !image) || typing) return
+    if (image && attachError) return
 
-    let targetId = activeId
-    if (!targetId) targetId = `chat_${Date.now()}`
+    const priorMessages = [...messages]
+    const userMsg = {
+      id: `tmp_${Date.now()}`,
+      role: 'user',
+      content: content || 'I attached a coin photo.',
+      image: image || null
+    }
 
-    const baseMessages = activeChat?.id === targetId ? activeChat.messages : []
-    const userMsg = { id: Date.now(), role: 'user', content: content || 'I attached a coin photo.', image }
-
-    appendMessage(targetId, userMsg)
+    setMessages((m) => [...m, userMsg])
     setInput('')
     setAttach(null)
+    setAttachError('')
     setTyping(true)
 
+    const toAI = (list) =>
+      list
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role, content: m.content, image: m.image || undefined }))
+
+    let chatId = activeId
+    let savedUser = null
+
+    if (isAuthenticated()) {
+      try {
+        if (!chatId) {
+          const res = await createChat()
+          chatId = res.chat.id
+          setActiveId(chatId)
+          setChats((c) => [
+            {
+              id: chatId,
+              title: res.chat?.title || 'New chat',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              messageCount: 0
+            },
+            ...c
+          ])
+        }
+        const saved = await saveMessage(chatId, {
+          role: 'user',
+          content: userMsg.content,
+          image: image || null
+        })
+        savedUser = saved.message
+        setMessages((m) => m.map((x) => (x.id === userMsg.id ? { ...saved.message, image: image || null } : x)))
+        setChats((c) =>
+          c.map((ch) => {
+            if (ch.id !== chatId) return ch
+            const title =
+              ch.title === 'New chat' || !ch.title
+                ? titleFromContent(userMsg.content, image)
+                : ch.title
+            return { ...ch, title, updatedAt: new Date().toISOString() }
+          })
+        )
+      } catch (e) {
+        console.warn('Could not save your message:', e?.message || e)
+      }
+    }
+
+    const aiMessages = toAI([
+      ...priorMessages,
+      savedUser
+        ? { role: 'user', content: savedUser.content, image: savedUser.image || null }
+        : userMsg
+    ])
+
+    let reply
+    let aiFailed = false
+    const hasImage = Boolean(image)
     try {
-      const reply = await chatCompletion([...baseMessages, userMsg])
-      appendMessage(targetId, { id: Date.now() + 1, role: 'assistant', content: reply, title: 'CoinScan AI' })
+      reply = await chatCompletion(aiMessages)
+      if (!reply || !String(reply).trim()) throw new Error('Empty reply')
     } catch (e) {
       console.error(e)
-      const r = respond(content || 'coin')
-      appendMessage(targetId, { id: Date.now() + 1, role: 'assistant', content: r.text, title: r.title })
-    } finally {
-      setTyping(false)
+      // Never invent answers when the AI service fails — show the real error.
+      aiFailed = true
+      reply =
+        (isBackendError(e) && e.message) ||
+        (hasImage
+          ? "Sorry, I couldn't reliably analyze this image right now. Please try again with a clearer image."
+          : 'Sorry, the AI service is unavailable right now. Please try again in a moment.')
     }
+
+    if (aiFailed) {
+      // Show the failure in the conversation but don't persist it as an
+      // assistant answer (it isn't one).
+      setMessages((m) => [
+        ...m,
+        { id: `tmp_err_${Date.now()}`, role: 'assistant', content: reply, title: 'CoinScan AI' }
+      ])
+      setTyping(false)
+      return
+    }
+
+    if (chatId && savedUser) {
+      try {
+        const saved = await saveMessage(chatId, { role: 'assistant', content: reply })
+        setMessages((m) => [...m, { ...saved.message, title: 'CoinScan AI' }])
+        setChats((c) =>
+          c.map((ch) =>
+            ch.id === chatId
+              ? { ...ch, updatedAt: new Date().toISOString(), messageCount: (ch.messageCount || 0) + 2 }
+              : ch
+          )
+        )
+        setTyping(false)
+        return
+      } catch (e) {
+        console.warn('Could not save the reply:', e?.message || e)
+      }
+    }
+    setMessages((m) => [
+      ...m,
+      { id: `tmp_${Date.now() + 1}`, role: 'assistant', content: reply, title: 'CoinScan AI' }
+    ])
+    setTyping(false)
   }
 
   const onFile = (file) => {
-    if (!file || !file.type.startsWith('image/')) return
+    setAttachError('')
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setAttachError('Please choose an image file (JPG, PNG, WebP…).')
+      return
+    }
+    if (file.size > MAX_IMAGE_FILE_BYTES) {
+      setAttachError('Image is too large — maximum 4 MB. Please choose a smaller photo.')
+      return
+    }
     const reader = new FileReader()
     reader.onload = () => setAttach(reader.result)
+    reader.onerror = () => setAttachError('Could not read that file. Please try another image.')
     reader.readAsDataURL(file)
   }
 
@@ -303,11 +335,11 @@ export default function Chatbot() {
         </div>
 
         {/* RIGHT — chat panel */}
-        <GlassCard className="glass-interior anim-fade-up anim-delay-1" style={{ padding: 0, display: 'flex', flexDirection: 'column', height: 'clamp(520px, 66vh, 700px)' }}>
-          <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border-faint)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <GlassCard className="glass-interior anim-fade-up anim-delay-1 chat-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', height: 'clamp(520px, 66vh, 700px)' }}>
+          <div className="chat-head" style={{ padding: '18px 22px', borderBottom: '1px solid var(--border-faint)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className={`kbd live-dot`} />
-            <span style={{ fontSize: 14, fontWeight: 700 }}>CoinScan AI</span>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' }}>CoinScan AI</span>
+            <span className="chat-head-status" style={{ fontSize: 12, color: 'var(--text-muted)', minWidth: 0 }}>
               {showIntro ? 'Online · knowledge base ready' : 'Chatting with CoinScan AI'}
             </span>
           </div>
@@ -395,6 +427,25 @@ export default function Chatbot() {
           </div>
 
           <div style={{ padding: '14px 18px 18px', borderTop: '1px solid var(--border-faint)' }}>
+            {attachError && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  marginBottom: 10,
+                  fontSize: 12.5,
+                  color: '#f5828a',
+                  background: 'rgba(245,130,138,0.08)',
+                  border: '1px solid rgba(245,130,138,0.3)',
+                  borderRadius: 10,
+                  padding: '7px 11px'
+                }}
+              >
+                <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+                {attachError}
+              </div>
+            )}
             {attach && (
               <div style={{ position: 'relative', display: 'inline-block', marginBottom: 10 }}>
                 <img src={attach} alt="Attachment" style={{ height: 68, width: 68, objectFit: 'cover', borderRadius: 12, border: '1px solid var(--border-strong)' }} />

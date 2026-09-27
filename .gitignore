@@ -25,9 +25,30 @@ logs/
 *.log
 npm-debug.log*
 
+# Playwright e2e output
+test-results/
+playwright-report/
+
 # OS / editor
 .DS_Store
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.log
+
+# Environment files
+.env
+**/.env
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+
+# Test output
+test-results/
+tests/benchmark_results.json

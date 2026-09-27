@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { authLogin, authSignup, authLogout, authMe, isBackendError } from '../api.js'
+import { authLogin, authSignup, authLogout, authMe } from '../api.js'
 
 const AuthContext = createContext(null)
 const STORAGE_KEY = 'coinscan_auth'
@@ -21,12 +21,6 @@ function loadStored() {
   }
 }
 
-function demoUser(identifier) {
-  const at = identifier.indexOf('@')
-  const username = at === -1 ? identifier.trim() : identifier.slice(0, at)
-  return { username, email: at === -1 ? `${username}@coinscan.io` : identifier, demo: true }
-}
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [token, setToken] = useState(null)
@@ -34,26 +28,44 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const stored = loadStored()
-    if (stored?.token && !stored.demo) {
+    if (stored?.token) {
       authMe(stored.token)
         .then((u) => {
           setUser(u)
           setToken(stored.token)
         })
-        .catch(() => {
-          // Token expired — drop stored session.
-          try {
-            localStorage.removeItem(STORAGE_KEY)
-          } catch (e) {
-            /* ignore */
+        .catch((e) => {
+          const status = e?.status
+          if (status === 401 || status === 403) {
+            // Definitively invalid/expired session — drop it.
+            try {
+              localStorage.removeItem(STORAGE_KEY)
+            } catch (err) {
+              /* ignore */
+            }
+          } else if (stored?.user) {
+            // Backend temporarily unreachable — keep the session and restore
+            // the known user instead of logging the user out over a blip.
+            setUser(stored.user)
+            setToken(stored.token)
+          } else {
+            try {
+              localStorage.removeItem(STORAGE_KEY)
+            } catch (err) {
+              /* ignore */
+            }
           }
         })
         .finally(() => setReady(true))
-    } else if (stored?.user && stored.demo) {
-      setUser(stored.user)
-      setToken(null)
-      setReady(true)
     } else {
+      if (stored?.demo) {
+        // Legacy offline demo session — no longer supported.
+        try {
+          localStorage.removeItem(STORAGE_KEY)
+        } catch (e) {
+          /* ignore */
+        }
+      }
       setReady(true)
     }
   }, [])
@@ -61,7 +73,7 @@ export function AuthProvider({ children }) {
   const applySession = (u, t) => {
     setUser(u)
     setToken(t)
-    persist({ user: u, token: t, demo: !t })
+    persist({ user: u, token: t })
   }
 
   const login = useCallback(async (identifier, password) => {
@@ -71,13 +83,6 @@ export function AuthProvider({ children }) {
       applySession(u, res.token || null)
       return { ok: true }
     } catch (e) {
-      // If the backend is unreachable but running locally isn't required
-      // (no backend configured), fall back to the offline demo account.
-      if (isBackendError(e) && (e.status === undefined)) {
-        const u = demoUser(identifier)
-        applySession(u, null)
-        return { ok: true, demo: true }
-      }
       return { ok: false, error: e.message || 'Unable to log in.' }
     }
   }, [])
@@ -89,29 +94,26 @@ export function AuthProvider({ children }) {
       applySession(u, res.token || null)
       return { ok: true }
     } catch (e) {
-      if (isBackendError(e) && e.status === undefined) {
-        const u = { username, email, demo: true }
-        applySession(u, null)
-        return { ok: true, demo: true }
-      }
       return { ok: false, error: e.message || 'Unable to create account.' }
     }
   }, [])
 
   const logout = useCallback(async () => {
-    if (token) {
-      try {
-        await authLogout(token)
-      } catch (e) {
-        /* ignore */
-      }
-    }
+    // Clear the local session first — never block the UI on the network.
+    const t = token
     setUser(null)
     setToken(null)
     try {
       localStorage.removeItem(STORAGE_KEY)
     } catch (e) {
       /* ignore */
+    }
+    if (t) {
+      try {
+        await authLogout(t)
+      } catch (e) {
+        /* ignore */
+      }
     }
   }, [token])
 

@@ -8,7 +8,7 @@ export default function StatCard({ icon: Icon, label, value, sub, trend = null, 
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
             {label}
           </div>
-          <div style={{ fontSize: 'clamp(28px,2.6vw,38px)', fontWeight: 800, letterSpacing: '-0.02em', marginTop: 10, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+          <div className="stat-value" style={{ fontSize: 'clamp(28px,2.6vw,38px)', fontWeight: 800, letterSpacing: '-0.02em', marginTop: 10, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
             {value}
           </div>
           <div style={{ fontSize: 13, color: 'var(--text-faint)', marginTop: 4 }}>

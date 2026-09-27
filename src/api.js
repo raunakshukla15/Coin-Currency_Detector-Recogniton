@@ -1,8 +1,5 @@
-const API_URL = 'https://openrouter.ai/api/v1/chat/completions'
-// NEVER hardcode the key here — it gets revoked by OpenRouter once pushed to GitHub.
-// Put it in a local `.env` file as VITE_OPENROUTER_API_KEY (see `.env.example`).
-// Vite only exposes env vars prefixed with VITE_ to the browser.
-const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || ''
+// All AI calls go through the FastAPI backend (/api/ai/*). The Gemini key
+// lives ONLY in backend/.env and is never exposed to the browser.
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api'
 
@@ -10,16 +7,50 @@ export function isBackendError(e) {
   return Boolean(e && (e.name === 'BackendError' || e.status !== undefined || e.wasBackend))
 }
 
+function getToken() {
+  try {
+    const raw = localStorage.getItem('coinscan_auth')
+    const session = raw ? JSON.parse(raw) : null
+    if (session?.token && !session.demo) return session.token
+  } catch (e) {
+    /* ignore */
+  }
+  return null
+}
+
+export function isAuthenticated() {
+  return Boolean(getToken())
+}
+
 function backendErrorMessage(res) {
   return `Backend error ${res.status}: ${res.statusText || 'unknown'}`
 }
 
+// FastAPI can return `detail` as a string, an array of validation objects,
+// or an object — render them all as readable text (never "[object Object]").
+function apiErrorMessage(body, res) {
+  const detail = body?.detail ?? body?.message
+  if (typeof detail === 'string' && detail) return detail
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) => (typeof d === 'string' ? d : typeof d?.msg === 'string' ? d.msg : null))
+      .filter(Boolean)
+    if (parts.length) return parts.join(' ')
+  }
+  if (detail && typeof detail === 'object' && typeof detail.msg === 'string') return detail.msg
+  return backendErrorMessage(res)
+}
+
 async function backendRequest(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  const token = getToken()
+  if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`
+
   let res
   try {
     res = await fetch(`${BACKEND_URL}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-      ...options
+      ...options,
+      headers
     })
   } catch (e) {
     const err = new Error('Backend unreachable. Make sure the FastAPI server is running on port 8000.')
@@ -35,7 +66,7 @@ async function backendRequest(path, options = {}) {
   }
 
   if (!res.ok) {
-    const err = new Error(body?.detail || body?.message || backendErrorMessage(res))
+    const err = new Error(apiErrorMessage(body, res))
     err.status = res.status
     err.wasBackend = true
     throw err
@@ -79,52 +110,11 @@ export function sendContact({ text, rating = 0, email = '', username = '' }) {
   })
 }
 
-// ---------- OpenRouter coin vision / chat ----------
-
-const VISION_MODEL = 'openai/gpt-4o-mini'
-const CHAT_MODEL = 'openai/gpt-4o-mini'
-
-async function callAPI(messages, model, maxTokens = 2000) {
-  if (!API_KEY) {
-    const err = new Error(
-      'Missing OpenRouter API key. Create a `.env` file with VITE_OPENROUTER_API_KEY set (see `.env.example`).'
-    )
-    err.status = 0
-    throw err
-  }
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${API_KEY}`,
-    },
-    // Cap max_tokens: OpenRouter reserves (prompt + max_tokens) against your
-    // credit balance. The default (~16k) exceeds small balances and causes
-    // 402 errors. Our JSON answer fits comfortably in 2000 tokens.
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
-  })
-  if (!res.ok) {
-    const errText = await res.text()
-    let hint = ''
-    if (res.status === 401) {
-      hint =
-        ' (401 Unauthorized: your OpenRouter key is missing, invalid, or was revoked after being pushed to Git — get a new one at https://openrouter.ai/keys)'
-    } else if (res.status === 402) {
-      hint = ' (402: OpenRouter account has insufficient credits — top up at https://openrouter.ai/credits)'
-    } else if (res.status === 429) {
-      hint = ' (429: rate limited — wait a moment and retry)'
-    }
-    const err = new Error(`API error ${res.status}: ${errText}${hint}`)
-    err.status = res.status
-    throw err
-  }
-  const data = await res.json()
-  return data.choices?.[0]?.message?.content || ''
-}
+// ---------- Coin vision / chat (proxied via backend) ----------
 
 // Downscale a data-URL image so its longest side is <= maxDim, encoded as
 // JPEG. Returns the original string if anything fails or it's already small.
-function downscaleImage(dataUrl, maxDim = 1024, quality = 0.82) {
+export function downscaleImage(dataUrl, maxDim = 1024, quality = 0.82) {
   return new Promise((resolve) => {
     try {
       if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) {
@@ -160,84 +150,15 @@ function downscaleImage(dataUrl, maxDim = 1024, quality = 0.82) {
 }
 
 export async function identifyItems(imageBase64) {
-  // Shrink large photos before upload: full-res phone/camera shots cost
-  // thousands of input tokens and can push the request over a small credit
-  // balance (402). 1024px is plenty for coin identification.
+  // Shrink large photos before upload to keep payloads small, then let the
+  // backend call the vision model server-side and return items plus a
+  // SEPARATE authenticity assessment.
   const smallImage = await downscaleImage(imageBase64, 1024).catch(() => imageBase64)
-  const content = [
-    {
-      type: 'text',
-      text: `You are an expert numismatist and currency expert AI. The attached image may contain ONE or MORE collectible objects: coins and/or paper currency notes (banknotes). Identify EVERY coin and EVERY currency note visible in the image - one object per item.
-
-Return a JSON ARRAY of item objects (and nothing else, no markdown), one element per detected item:
-[
-  {
-    "kind": "coin" or "currency",
-    ...fields for that kind...
-  }
-]
-
-For kind = "coin", use ONLY these fields:
-{
-  "kind": "coin",
-  "name": "Coin name (e.g. '10 Rupees (₹10)')",
-  "country": "Country of origin",
-  "year": "Year or era (e.g. '2010 – Present')",
-  "denomination": "Denomination (e.g. '10 Rupees (₹10)')",
-  "composition": "Metal composition (e.g. 'Bimetallic\\n(Cu-Ni center, Al-Bronze ring)')",
-  "weight": "Weight (e.g. '7.71 grams')",
-  "diameter": "Diameter (e.g. '27 mm')",
-  "obverse": "Obverse description (e.g. 'Ashoka Lion Capital\\n(Satyameva Jayate)')",
-  "reverse": "Reverse description (e.g. '₹10 with decorative rays')",
-  "description": "A brief 2-3 sentence description of the coin",
-  "rarity": "Common, Uncommon, Rare, or Very Rare",
-  "estimatedValue": "Estimated market value range in USD (e.g. '$1 – $15')",
-  "type": "One of: rupee10, rupee1, eic, tetradrachm, morgan, drape, anna, sestertius, commem, kushan",
-  "match": 92,
-  "confidence": "low, medium, or high"
-}
-
-For kind = "currency", use ONLY these fields:
-{
-  "kind": "currency",
-  "name": "Note name (e.g. '100 Indian Rupees Note')",
-  "country": "Country of issue (e.g. 'India')",
-  "currencyName": "Currency unit (e.g. 'Indian Rupee', 'US Dollar')",
-  "denomination": "Denomination (e.g. '100 Rupees (₹100)')",
-  "series": "Design series or theme (e.g. 'Mahatma Gandhi New Series 2016')",
-  "year": "Series year or era (e.g. '2016 – Present')",
-  "front": "Front design description",
-  "back": "Back design description",
-  "description": "A brief 2-3 sentence description of the note",
-  "rarity": "Common or Collectible",
-  "estimatedValue": "Estimated collector value range in USD",
-  "match": 90,
-  "confidence": "low, medium, or high"
-}
-
-Rules:
-- Return one object per distinct item visible in the image, in the order they appear (top-left to bottom-right).
-- Return a coin object for every coin and a currency object for every currency note, even if they appear together in one photo.
-- Ignore rulers, backgrounds, hands, and shipping material.
-- If only one item is present, return an array with exactly one object.
-- If a field cannot be determined, use a reasonable default.
-Return ONLY the JSON array, no extra text.`,
-    },
-    {
-      type: 'image_url',
-      image_url: { url: smallImage },
-    },
-  ]
-
-  const raw = await callAPI([{ role: 'user', content }], VISION_MODEL)
-  const data = extractJSON(raw)
-  const items = Array.isArray(data)
-    ? data.filter((c) => c && typeof c === 'object')
-    : data && typeof data === 'object'
-      ? [data]
-      : [enrichFallback()]
-  // Normalize kind: default to 'coin' if the model omitted it.
-  return items.length ? items : [enrichFallback()]
+  const data = await backendRequest('/ai/identify', {
+    method: 'POST',
+    body: JSON.stringify({ image: smallImage })
+  })
+  return { items: data.items || [], authenticity: data.authenticity || null }
 }
 
 // Kept as an alias for compatibility.
@@ -245,69 +166,120 @@ export function identifyCoins(imageBase64) {
   return identifyItems(imageBase64)
 }
 
-function extractJSON(raw) {
-  if (!raw) return null
-  let cleaned = String(raw).replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+export async function chatCompletion(messages) {
+  const slimmed = await Promise.all(
+    (messages || []).map(async (m) => {
+      if (m?.image) {
+        const image = await downscaleImage(m.image, 1024).catch(() => m.image)
+        return { ...m, image }
+      }
+      return m
+    })
+  )
+  const data = await backendRequest('/ai/chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages: slimmed })
+  })
+  return data.reply || ''
+}
+
+// ---------- Scan history (per-user, MySQL) ----------
+
+export function fetchScans() {
+  return backendRequest('/scans')
+}
+
+export function saveScan({ items, image = null, authenticity = null }) {
+  return backendRequest('/scans', {
+    method: 'POST',
+    body: JSON.stringify({ items, image, authenticity })
+  })
+}
+
+export function deleteScan(id) {
+  return backendRequest(`/scans/${id}`, { method: 'DELETE' })
+}
+
+export function clearScans() {
+  return backendRequest('/scans', { method: 'DELETE' })
+}
+
+// ---------- Chat conversations (per-user, MySQL) ----------
+
+export function fetchChats() {
+  return backendRequest('/chats')
+}
+
+export function createChat(title = 'New chat') {
+  return backendRequest('/chats', {
+    method: 'POST',
+    body: JSON.stringify({ title })
+  })
+}
+
+export function fetchMessages(chatId) {
+  return backendRequest(`/chats/${chatId}/messages`)
+}
+
+export function saveMessage(chatId, { role, content, image = null }) {
+  return backendRequest(`/chats/${chatId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ role, content, image })
+  })
+}
+
+export function deleteChat(chatId) {
+  return backendRequest(`/chats/${chatId}`, { method: 'DELETE' })
+}
+
+// ---------- Images (owner-only fetch, returns a data URL) ----------
+
+export async function fetchImageDataUrl(imageId) {
+  if (!imageId) return null
+  const token = getToken()
+  if (!token) return null
+  let res
   try {
-    return JSON.parse(cleaned)
+    res = await fetch(`${BACKEND_URL}/images/${imageId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
   } catch (e) {
-    /* try to isolate the first JSON array/object */
-    const arrMatch = cleaned.match(/\[[\s\S]*\]/)
-    if (arrMatch) {
-      try {
-        return JSON.parse(arrMatch[0])
-      } catch (e2) {
-        /* ignore */
-      }
-    }
-    const objMatch = cleaned.match(/\{[\s\S]*\}/)
-    if (objMatch) {
-      try {
-        return JSON.parse(objMatch[0])
-      } catch (e2) {
-        /* ignore */
-      }
-    }
     return null
   }
+  if (!res.ok) return null
+  const blob = await res.blob()
+  return await new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(blob)
+  })
 }
 
-function enrichFallback() {
-  return {
-    kind: 'coin',
-    name: 'Unidentified Coin',
-    country: 'Unknown',
-    year: '',
-    denomination: 'Unknown',
-    composition: 'Unknown',
-    weight: 'Unknown',
-    diameter: 'Unknown',
-    obverse: 'Unable to read',
-    reverse: 'Unable to read',
-    description: 'The AI could not reliably identify this coin from the image. Please try a clearer, well-lit photo.',
-    rarity: 'Unknown',
-    estimatedValue: '$1 – $5',
-    type: 'rupee10',
-    match: 0,
-    confidence: 'low'
-  }
+// ---------- Collection (per-user, MySQL) ----------
+
+export function fetchCollection() {
+  return backendRequest('/collection')
 }
 
-export async function chatCompletion(messages) {
-  const systemMessage = {
-    role: 'system',
-    content: `You are CoinScan AI, an expert numismatic assistant. You help users with coin identification, history, grading, mint marks, market values, errors, and collecting advice. Be knowledgeable, concise, and friendly. Use bullet points and structured formatting when helpful. If a user uploads an image, analyze it and describe the coin.`,
-  }
+export function addCollectionItem(coinId, item, image = null) {
+  return backendRequest('/collection', {
+    method: 'POST',
+    body: JSON.stringify({ coinId, item, image })
+  })
+}
 
-  const formatted = [systemMessage, ...messages.map((m) => ({
-    role: m.role,
-    content: m.image
-      ? [
-          { type: 'text', text: m.content || 'Analyze this coin image.' },
-          { type: 'image_url', image_url: { url: m.image } },
-        ]
-      : m.content,
-  }))]
+export function setCollectionFavorite(coinId, favorite) {
+  return backendRequest(`/collection/${encodeURIComponent(coinId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite })
+  })
+}
 
-  return await callAPI(formatted, CHAT_MODEL)
+export function removeCollectionItem(coinId) {
+  return backendRequest(`/collection/${encodeURIComponent(coinId)}`, { method: 'DELETE' })
+}
+
+export function clearCollectionItems() {
+  return backendRequest('/collection', { method: 'DELETE' })
 }

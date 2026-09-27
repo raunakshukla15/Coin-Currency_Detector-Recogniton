@@ -6,3 +6,4 @@ cryptography>=42
 python-dotenv>=1.0
 pydantic>=2.9
 pydantic[email]>=2.9
+google-genai>=2.0.0,<3.0.0
