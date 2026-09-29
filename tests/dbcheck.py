@@ -11,7 +11,13 @@ Examples:
     python tests/dbcheck.py collection --email user@coinscan-e2e.com --json
     python tests/dbcheck.py user --email user@coinscan-e2e.com
     python tests/dbcheck.py delete-user --email user@coinscan-e2e.com
-    python tests/dbcheck.py clear-contacts
+    python tests/dbcheck.py clear-contacts-e2e
+
+Note: `clear-contacts` deletes EVERY contact row (development reset only —
+never call it from a spec). Specs use `clear-contacts-e2e`, which removes
+only rows created by contact.spec.js (email prefix `e2e-` or message
+prefix `Playwright feedback `), so real feedback and rows from other
+suites are never touched.
 
 Exit code 0 = success (and a JSON document on stdout); 1 = failure.
 """
@@ -42,7 +48,7 @@ def cmd_count_contacts(_args):
 
 def cmd_contacts(args):
     rows = db.query(
-        "SELECT id, name, email, rating, message, created_at "
+        "SELECT id, user_id, name, email, rating, message, created_at "
         "FROM contact_messages ORDER BY id DESC LIMIT %s",
         (int(args.limit),),
     )
@@ -58,8 +64,35 @@ def cmd_contacts(args):
 
 
 def cmd_clear_contacts(_args):
+    """Development reset: wipes EVERY contact row. Never use from a spec."""
     db.execute("DELETE FROM contact_messages")
     _out({"ok": True})
+
+
+def cmd_clear_contacts_e2e(_args):
+    """Delete ONLY contact.spec.js test rows.
+
+    Scope (both needed to catch current + historical spec rows):
+      - email LIKE 'e2e-%'          (current marker format), OR
+      - message LIKE 'Playwright feedback %'  (spec text, incl. old rows
+        whose email was the username@domain).
+    Real feedback, smoke rows, acceptance rows, and rows written by the
+    Python suites (message prefix `contact-smtp-` / `iso-tests-`) are
+    never touched.
+    """
+    scope = "(email LIKE 'e2e-%' OR message LIKE 'Playwright feedback %')"
+    row = db.fetch_one(
+        "SELECT COUNT(*) AS n FROM contact_messages "
+        "WHERE email LIKE %s OR message LIKE %s",
+        ("e2e-%", "Playwright feedback %"),
+    )
+    matched = int(row["n"] if row else 0)
+    db.execute(
+        "DELETE FROM contact_messages WHERE email LIKE %s "
+        "OR message LIKE %s",
+        ("e2e-%", "Playwright feedback %"),
+    )
+    _out({"ok": True, "deleted": matched, "scope": scope})
 
 
 def cmd_user(args):
@@ -100,6 +133,19 @@ def cmd_clear_scans(args):
     if user:
         db.execute("DELETE FROM scan_history WHERE user_id = %s", (user["id"],))
     _out({"ok": True, "user_found": bool(user)})
+
+
+def cmd_chats(args):
+    user = db.fetch_one("SELECT id FROM users WHERE email = %s", (args.email,))
+    if not user:
+        _out({"chats": [], "user_found": False})
+        return
+    rows = db.query(
+        "SELECT id, title, created_at FROM chats WHERE user_id = %s "
+        "ORDER BY id DESC LIMIT %s",
+        (user["id"], int(args.limit)),
+    )
+    _out({"chats": rows, "user_found": True})
 
 
 def cmd_collection(args):
@@ -153,6 +199,7 @@ def main():
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--match", default="")
     sub.add_parser("clear-contacts")
+    sub.add_parser("clear-contacts-e2e")
 
     p = sub.add_parser("user")
     p.add_argument("--email", required=True)
@@ -165,6 +212,10 @@ def main():
     p.add_argument("--limit", type=int, default=20)
     p = sub.add_parser("clear-scans")
     p.add_argument("--email", required=True)
+
+    p = sub.add_parser("chats")
+    p.add_argument("--email", required=True)
+    p.add_argument("--limit", type=int, default=20)
 
     p = sub.add_parser("collection")
     p.add_argument("--email", required=True)
@@ -181,11 +232,13 @@ def main():
         "count-contacts": cmd_count_contacts,
         "contacts": cmd_contacts,
         "clear-contacts": cmd_clear_contacts,
+        "clear-contacts-e2e": cmd_clear_contacts_e2e,
         "user": cmd_user,
         "users": cmd_users,
         "delete-user": cmd_delete_user,
         "scans": cmd_scans,
         "clear-scans": cmd_clear_scans,
+        "chats": cmd_chats,
         "collection": cmd_collection,
         "clear-collection": cmd_clear_collection,
         "clear-user": cmd_clear_user,

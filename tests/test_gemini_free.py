@@ -94,6 +94,7 @@ def t_allowlist_accepts_and_rejects():
         expect(ai._assert_free_only(f"models/{good}") == good,
                f"models/-prefixed {good} should be accepted")
     for bad in ("", "gemini-2.5-pro", "gemini-3.5-flash", "gpt-4o",
+                "gemini-2.5-flash-lite",  # retired model must stay rejected
                 "openrouter/free", "qwen/qwen3.8-27b:free"):
         try:
             ai._assert_free_only(bad)
@@ -106,12 +107,12 @@ def t_allowlist_accepts_and_rejects():
 
 def t_free_queue_order():
     old = config.GEMINI_MODEL
-    config.GEMINI_MODEL = "gemini-2.5-flash-lite"
+    config.GEMINI_MODEL = "gemini-3.1-flash-lite"
     try:
         q = ai._free_model_queue()
     finally:
         config.GEMINI_MODEL = old
-    expect(q[0] == "gemini-2.5-flash-lite", f"primary not first: {q}")
+    expect(q[0] == "gemini-3.1-flash-lite", f"primary not first: {q}")
     expect(set(q) == set(ai._VERIFIED_FREE_GEMINI_MODELS),
            f"queue must only contain verified free models: {q}")
     expect(len(q) == len(set(q)), f"duplicate queue entries: {q}")

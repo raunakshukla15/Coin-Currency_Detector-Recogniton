@@ -103,10 +103,10 @@ export function authLogout(token) {
 
 // ---------- Contact Us ----------
 
-export function sendContact({ text, rating = 0, email = '', username = '' }) {
+export function sendContact({ text, rating = 0, email = '', username = '', submissionId = null }) {
   return backendRequest('/contact', {
     method: 'POST',
-    body: JSON.stringify({ text, rating, email, username })
+    body: JSON.stringify({ text, rating, email, username, submissionId })
   })
 }
 

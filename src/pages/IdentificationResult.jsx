@@ -216,7 +216,7 @@ function formatCoinName(name) {
 
 export default function IdentificationResult() {
   const nav = useNavigate()
-  const { addCoin, collection, removeCoin } = useCollection()
+  const { addCoin, collection, removeCoin, saveError } = useCollection()
 
   const ident = useMemo(() => {
     try {
@@ -268,6 +268,14 @@ export default function IdentificationResult() {
     setToast('')
     setTimeout(() => setToast(m), 30)
   }
+
+  useEffect(() => {
+    // A failed collection save replaces the optimistic "Added…" toast with
+    // the honest error (the failed item itself was rolled back in the
+    // context, so the button flips back to "Add to Collection" and a retry
+    // is possible).
+    if (saveError) showToast(saveError)
+  }, [saveError])
 
   const share = async (coin) => {
     const payload = {

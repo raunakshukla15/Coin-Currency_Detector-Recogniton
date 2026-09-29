@@ -18,9 +18,23 @@ function dbContacts() {
   }
 }
 
-function dbClearContacts() {
+function dbUser(email) {
   try {
-    return execFileSync('python', [DBCHECK, 'clear-contacts'], {
+    return execFileSync('python', [DBCHECK, 'user', '--email', email], {
+      encoding: 'utf8',
+      timeout: 20_000
+    })
+  } catch (e) {
+    return `dbcheck failed: ${e.message}`
+  }
+}
+
+function dbClearContacts() {
+  // Scoped cleanup: removes ONLY rows this suite created (email prefix
+  // `e2e-` or message prefix `Playwright feedback `) — never real
+  // feedback, never rows from the Python suites (see tests/dbcheck.py).
+  try {
+    return execFileSync('python', [DBCHECK, 'clear-contacts-e2e'], {
       encoding: 'utf8',
       timeout: 20_000
     })
@@ -30,6 +44,10 @@ function dbClearContacts() {
 }
 
 test.describe('Contact form', () => {
+  // Remove the rows this suite wrote so repeated runs don't accumulate.
+  test.afterAll(() => {
+    dbClearContacts()
+  })
   test('O: submitting feedback saves it on the server and shows the success state', async ({
     page
   }) => {
@@ -61,6 +79,16 @@ test.describe('Contact form', () => {
     await expect
       .poll(() => dbContacts(), { timeout: 20_000 })
       .toContain(marker)
+
+    // ...and it is linked to THIS account's user row (signed-in submissions
+    // store user_id; guest submissions would be NULL)
+    const saved = JSON.parse(dbContacts()).contacts.find((r) => r.email === marker)
+    expect(saved, 'contact row for the marker email exists').toBeTruthy()
+    const account = JSON.parse(dbUser(user.email))
+    expect(account.found, 'user row exists').toBe(true)
+    expect(saved.user_id, 'contact row linked to the submitting account').toBe(
+      account.user.id
+    )
 
     expect(errors).toEqual([])
   })
@@ -106,5 +134,44 @@ test.describe('Contact form', () => {
     // Selecting a lower rating deactivates the higher one
     await page.getByTestId('rating-star-2').click()
     await expect(star4).not.toHaveCSS('color', 'rgb(245, 200, 106)')
+  })
+
+  test('P: Contact Details card shows exactly the four updated team details', async ({
+    page
+  }) => {
+    const errors = trackPageErrors(page)
+    const user = uniqueUser()
+    await signup(page, user)
+    await page.goto('/contact')
+
+    // Scope to the Contact Details card (second grid column), not the form
+    const card = page.locator('.contact-grid > *').filter({ hasText: 'Contact Details' })
+    await expect(card).toHaveCount(1)
+    await expect(card).toBeVisible()
+
+    const details = [
+      ['Made by', 'Team 5'],
+      ['Contact Number', '9561119717'],
+      ['Email', 'raunakbshukla133@gmail.com'],
+      ['Location', 'India']
+    ]
+    for (const [label, value] of details) {
+      await expect(card.getByText(label, { exact: true })).toBeVisible()
+      await expect(card.getByText(value, { exact: true })).toBeVisible()
+    }
+
+    // The old placeholder values are gone from the page entirely
+    await expect(page.getByText('Earth', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Available on request', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('your-team@example.com', { exact: true })).toHaveCount(0)
+
+    // Mobile viewport: all four pairs stay visible
+    await page.setViewportSize({ width: 390, height: 844 })
+    for (const [label, value] of details) {
+      await expect(card.getByText(label, { exact: true })).toBeVisible()
+      await expect(card.getByText(value, { exact: true })).toBeVisible()
+    }
+
+    expect(errors).toEqual([])
   })
 })

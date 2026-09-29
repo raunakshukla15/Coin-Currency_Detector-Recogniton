@@ -14,7 +14,9 @@ export function uniqueUser() {
     // Pydantic EmailStr rejects reserved/special-use domains (.local, .test,
     // example.com) — use a normal-looking domain.
     email: `pw${id}@coinscan-e2e.com`,
-    password: 'Playwright!123'
+    // Randomly generated per account (letters + digits + symbol, well over
+    // the backend's minimum length). Never reused across accounts.
+    password: `Playwright!${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-3)}`
   }
 }
 

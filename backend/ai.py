@@ -311,10 +311,11 @@ LAST_RESOLVED_MODEL: str | None = None
 # lists input+output as "Free of charge"; all accept image input).
 # Used as in-process failover when the primary model errors or returns
 # empty/non-JSON content. NEVER append a paid model here.
+# (gemini-2.5-flash-lite removed: retired by Google — returns 404 and only
+# wasted a failover slot.)
 _VERIFIED_FREE_GEMINI_MODELS = (
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-lite",
 )
 
 # Per-attempt / overall time budgets (free models are slow; never hang).

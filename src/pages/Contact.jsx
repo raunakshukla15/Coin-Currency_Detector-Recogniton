@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Send, Star, Mail, Phone, MapPin, Users, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react'
 import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
@@ -8,25 +8,32 @@ import { useAuth } from '../context/AuthContext.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+// Display-only contact info shown on this page. Teams should replace these
+// placeholders with their own public contact details before shipping.
 const CONTACT_INFO = [
   { icon: Users, label: 'Made by', value: 'Team 5' },
   { icon: Phone, label: 'Contact Number', value: '9561119717' },
   { icon: Mail, label: 'Email', value: 'raunakbshukla133@gmail.com' },
-  { icon: MapPin, label: 'Location', value: 'Earth' }
+  { icon: MapPin, label: 'Location', value: 'India' }
 ]
 
 export default function Contact() {
   const { user } = useAuth()
+  // rating 0 = "not rated" (stars untouched) — stored as-is by the backend.
   const [rating, setRating] = useState(0)
   const [text, setText] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [sending, setSending] = useState(false)
   const [formError, setFormError] = useState('')
-  // Outcome: null | {saved, emailSent} — three distinct states:
-  //   saved+emailSent  -> confirmation says emailed
-  //   saved+!emailSent -> confirmation says saved, email could not be sent
-  //   (failure)        -> formError, no confirmation shown
+  // Idempotency key: one per distinct message. A network retry of the SAME
+  // text reuses the id, so the backend never stores or emails it twice.
+  const submissionIdRef = useRef(null)
+  // Outcome: null | {saved, emailSent, duplicate} — distinct states:
+  //   saved+emailSent   -> confirmation says emailed
+  //   saved+!emailSent  -> confirmation says saved, email could not be sent
+  //   saved+duplicate   -> confirmation says already received (retry)
+  //   (failure)         -> formError, no confirmation shown
   const [outcome, setOutcome] = useState(null)
 
   useEffect(() => {
@@ -41,6 +48,7 @@ export default function Contact() {
     setName(user?.username || '')
     setEmail(user?.email || '')
     setFormError('')
+    submissionIdRef.current = null
   }
 
   const submit = async () => {
@@ -51,14 +59,25 @@ export default function Contact() {
       return
     }
     setSending(true)
+    if (!submissionIdRef.current) {
+      submissionIdRef.current =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+    }
     try {
       const res = await sendContact({
         text: text.trim(),
         rating,
         email: email.trim(),
-        username: name.trim()
+        username: name.trim(),
+        submissionId: submissionIdRef.current
       })
-      setOutcome({ saved: res?.saved !== false, emailSent: Boolean(res?.emailSent) })
+      setOutcome({
+        saved: res?.saved !== false,
+        emailSent: Boolean(res?.emailSent),
+        duplicate: Boolean(res?.duplicate)
+      })
     } catch (e) {
       console.error('Contact submission failed:', e)
       setFormError(e?.message || 'Could not send your feedback. Please try again.')
@@ -84,19 +103,25 @@ export default function Contact() {
               style={{ textAlign: 'center', padding: '40px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}
             >
               <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(0,229,195,0.12)', border: '1px solid var(--border-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {outcome.emailSent ? (
+                {outcome.duplicate || outcome.emailSent ? (
                   <CheckCircle2 size={22} style={{ color: 'var(--accent)' }} />
                 ) : (
                   <AlertTriangle size={22} style={{ color: '#f5b450' }} />
                 )}
               </div>
               <div style={{ fontSize: 18, fontWeight: 700 }}>
-                {outcome.emailSent ? 'Thank you!' : 'Your feedback was saved'}
+                {outcome.duplicate
+                  ? 'Thank you!'
+                  : outcome.emailSent
+                    ? 'Thank you!'
+                    : 'Your feedback was saved'}
               </div>
               <div data-testid="contact-success-detail" style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: 380 }}>
-                {outcome.emailSent
-                  ? 'Your message was saved and emailed to the team. The Team 5 reads every message.'
-                  : 'Your message was saved on the server, but email delivery to the team failed — it is stored and will be visible to the team from the database.'}
+                {outcome.duplicate
+                  ? 'Your feedback was already received — no need to send it again.'
+                  : outcome.emailSent
+                    ? 'Your message was saved and emailed to the team. The Team 5 reads every message.'
+                    : 'Your message was saved on the server, but email delivery to the team failed — it is stored and will be visible to the team from the database.'}
               </div>
               <button className="btn btn-primary btn-md" data-testid="contact-send-another" onClick={resetForm} style={{ marginTop: 8 }}>
                 <RefreshCw size={15} /> Send another message
@@ -164,8 +189,12 @@ export default function Contact() {
                   data-testid="contact-message"
                   rows={6}
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={(e) => {
+                    setText(e.target.value)
+                    submissionIdRef.current = null // new content -> new submission
+                  }}
                   placeholder="Share your feedback or ask a question..."
+                  maxLength={4000}
                   style={{ padding: 14, resize: 'vertical', fontFamily: 'inherit' }}
                 />
               </div>

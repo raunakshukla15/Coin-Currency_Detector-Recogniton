@@ -27,6 +27,7 @@ SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+# Team inbox that receives Contact Us feedback (shown on the Contact page).
 CONTACT_TO = os.getenv("CONTACT_TO", "raunakbshukla133@gmail.com")
 # STARTTLS: on by default for submission ports (587/25); off otherwise so
 # local/internal relays (e.g. a test capture server on 2525) work without TLS.

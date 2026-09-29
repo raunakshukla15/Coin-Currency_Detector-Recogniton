@@ -12,13 +12,23 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
+-- Feedback from the Contact Us page.
+-- rating: 0 = "not rated" (stars left untouched), 1-5 = explicit rating.
+-- user_id: submitter's account when signed in, NULL for guest submissions.
+-- submission_id: client-generated idempotency key (UUID) — retries with the
+-- same id never create a duplicate row or duplicate email.
 CREATE TABLE IF NOT EXISTS contact_messages (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NULL,
   name VARCHAR(40) DEFAULT '',
   email VARCHAR(255) DEFAULT '',
   rating TINYINT UNSIGNED NOT NULL DEFAULT 0,
   message TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  submission_id VARCHAR(36) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_contact_submission (submission_id),
+  CONSTRAINT fk_contact_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_contact_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- Per-user uploaded image bytes (scan images, chatbot images, collection images).

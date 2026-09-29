@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { History, Coins, ExternalLink, Trash2, ScanSearch, Layers, ShieldQuestion, ShieldAlert, BadgeCheck } from 'lucide-react'
 import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
 import Button from '../components/Button.jsx'
 import PageLayout from '../components/PageLayout.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 import { fetchScans, deleteScan, clearScans, fetchImageDataUrl } from '../api.js'
 
 // Same four authenticity assessments as the result page (legacy
@@ -61,31 +62,54 @@ function itemCount(entry) {
 
 export default function HistoryPage() {
   const nav = useNavigate()
+  const { user, ready: authReady } = useAuth()
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [confirmClear, setConfirmClear] = useState(false)
   const [toast, setToast] = useState('')
 
+  // Monotonic run token: every identity change (login, logout, signup,
+  // account switch — with or without navigation) increments it, which
+  // invalidates every in-flight response from the previous account so a
+  // stale reply can never repaint this page.
+  const runRef = useRef(0)
+
   const refresh = async (keepConfirm = false) => {
+    const run = runRef.current
     try {
       const list = await loadFromServer()
+      if (run !== runRef.current) return
       setHistory(list)
     } catch (e) {
       console.warn('Unable to load scan history:', e?.message || e)
-      setHistory([])
+      if (run === runRef.current) setHistory([])
     } finally {
-      setLoading(false)
-      if (!keepConfirm) setConfirmClear(false)
+      if (run === runRef.current) {
+        setLoading(false)
+        if (!keepConfirm) setConfirmClear(false)
+      }
     }
   }
 
+  // Identity-scoped load. On every account change the previous account's
+  // list is wiped synchronously BEFORE any fetch can resolve, then only the
+  // current account's uploads are fetched (server-side JWT scoping).
   useEffect(() => {
+    runRef.current += 1
+    setHistory([])
+    setLoading(true)
+    if (!authReady) return undefined
+    if (!user) {
+      setLoading(false)
+      return undefined
+    }
     refresh()
     window.addEventListener('coinscan-history', refresh)
     return () => {
       window.removeEventListener('coinscan-history', refresh)
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, authReady])
 
   useEffect(() => {
     if (toast) {

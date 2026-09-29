@@ -4,6 +4,7 @@ import PageHeader from '../components/PageHeader.jsx'
 import GlassCard from '../components/GlassCard.jsx'
 import ChatMessage from '../components/ChatMessage.jsx'
 import PageLayout from '../components/PageLayout.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 import {
   chatCompletion,
   fetchChats,
@@ -56,6 +57,7 @@ const INTRO = [
 ]
 
 export default function Chatbot() {
+  const { user, ready: authReady } = useAuth()
   const [chats, setChats] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -63,30 +65,55 @@ export default function Chatbot() {
   const [typing, setTyping] = useState(false)
   const [attach, setAttach] = useState(null)
   const [attachError, setAttachError] = useState('')
+  const [deleteError, setDeleteError] = useState('')
   const fileRef = useRef(null)
   const endRef = useRef(null)
 
+  // Monotonic run token: incremented on every identity change so responses
+  // and continuations from the previous account can never write into this
+  // account's state (or trigger further API calls on its behalf).
+  const runRef = useRef(0)
+
+  // Monotonic view token: bumped whenever the visible conversation changes
+  // (open chat, new chat, delete active, account switch). Late async results
+  // (message loads, AI replies) from a previous view must never paint into
+  // the conversation that is on screen now.
+  const viewRef = useRef(0)
+
+  const changeView = () => {
+    viewRef.current += 1
+    setTyping(false)
+  }
+
   const showIntro = !activeId || messages.length === 0
 
-  // Load this user's conversations from the server (MySQL, per user_id).
+  // Load the CURRENT account's conversations (server-side JWT scoping).
+  // On every identity change:
+  //   1. the previous account's chats/messages are wiped synchronously;
+  //   2. in-flight replies from the previous account are invalidated;
+  //   3. fetch errors leave the list EMPTY (never stale data).
   useEffect(() => {
-    let cancelled = false
+    const run = ++runRef.current
+    changeView()
+    setChats([])
+    setActiveId(null)
+    setMessages([])
+    setInput('')
+    setAttach(null)
+    setAttachError('')
+    setDeleteError('')
+    if (!authReady || !user) return undefined
     ;(async () => {
       try {
-        if (isAuthenticated()) {
-          const { chats: serverChats } = await fetchChats()
-          if (!cancelled) setChats(Array.isArray(serverChats) ? serverChats : [])
-        }
+        const { chats: serverChats } = await fetchChats()
+        if (run === runRef.current) setChats(Array.isArray(serverChats) ? serverChats : [])
       } catch (e) {
         console.warn('Unable to load chat history:', e?.message || e)
-      } finally {
-        if (!cancelled) setChats((c) => c)
+        if (run === runRef.current) setChats([])
       }
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    return undefined
+  }, [user?.id, authReady])
 
   useEffect(() => {
     // Only follow the conversation — never auto-scroll past the intro panel.
@@ -95,6 +122,7 @@ export default function Chatbot() {
   }, [messages, typing])
 
   const newChat = () => {
+    changeView()
     setActiveId(null)
     setMessages([])
     setInput('')
@@ -104,6 +132,9 @@ export default function Chatbot() {
 
   const openChat = async (id) => {
     if (id === activeId) return
+    const run = runRef.current
+    const view = ++viewRef.current
+    setTyping(false)
     setActiveId(id)
     setMessages([])
     setInput('')
@@ -111,6 +142,8 @@ export default function Chatbot() {
     setAttachError('')
     try {
       const res = await fetchMessages(id)
+      // Ignore stale loads: identity changed or the user switched views.
+      if (run !== runRef.current || view !== viewRef.current) return
       const loaded = (res.messages || []).map((m) => ({
         id: m.id,
         role: m.role,
@@ -121,20 +154,56 @@ export default function Chatbot() {
       setMessages(loaded)
     } catch (e) {
       console.warn('Unable to load conversation:', e?.message || e)
+      if (run === runRef.current && view === viewRef.current) setMessages([])
     }
   }
 
   const deleteChat = async (id) => {
+    const run = runRef.current
     const isActive = activeId === id
-    try {
-      if (isAuthenticated()) await apiDeleteChat(id)
-    } catch (e) {
-      console.warn('Unable to delete conversation:', e?.message || e)
-    }
+    // Snapshots taken before the optimistic clear so a failed delete can
+    // put the conversation back exactly as it was.
+    const prevChats = chats
+    const prevMessages = messages
+    setDeleteError('')
+    // Optimistically remove from the sidebar — restored below if the server
+    // rejects the delete (a failed delete must never look successful).
     setChats((c) => c.filter((x) => x.id !== id))
     if (isActive) {
+      changeView()
       setActiveId(null)
       setMessages([])
+    }
+    // Captured AFTER our own optimistic view bump: any later difference
+    // means the user navigated, not us.
+    const view = viewRef.current
+    try {
+      if (isAuthenticated()) await apiDeleteChat(id)
+      // Success: if the account switched meanwhile, the identity effect has
+      // already rebuilt the list — never touch it again.
+      if (run !== runRef.current) return
+    } catch (e) {
+      console.warn('Unable to delete conversation:', e?.message || e)
+      // A late failure from a previous account must never write into the
+      // current account's state (list or error line).
+      if (run !== runRef.current) return
+      const idx = prevChats.findIndex((x) => x.id === id)
+      const entry = idx >= 0 ? prevChats[idx] : null
+      if (entry) {
+        setChats((cur) => {
+          if (cur.some((x) => x.id === id)) return cur
+          const next = [...cur]
+          next.splice(Math.max(0, Math.min(idx, next.length)), 0, entry)
+          return next
+        })
+      }
+      // Restore the open conversation only if the user has not navigated
+      // elsewhere since — never clobber the view that is on screen now.
+      if (isActive && view === viewRef.current) {
+        setActiveId(id)
+        setMessages(prevMessages)
+      }
+      setDeleteError('Could not delete this conversation. Please try again.')
     }
   }
 
@@ -142,6 +211,14 @@ export default function Chatbot() {
     const content = text.trim()
     if ((!content && !image) || typing) return
     if (image && attachError) return
+
+    const run = runRef.current
+    const view = viewRef.current
+    const identityChanged = () => run !== runRef.current
+    // True when the user opened another conversation / New Chat while this
+    // send was in flight: the reply still belongs to the originating chat
+    // (persist it server-side) but must never be painted into the new view.
+    const viewChanged = () => view !== viewRef.current
 
     const priorMessages = [...messages]
     const userMsg = {
@@ -169,8 +246,9 @@ export default function Chatbot() {
       try {
         if (!chatId) {
           const res = await createChat()
+          if (identityChanged()) return
           chatId = res.chat.id
-          setActiveId(chatId)
+          if (!viewChanged()) setActiveId(chatId)
           setChats((c) => [
             {
               id: chatId,
@@ -187,8 +265,13 @@ export default function Chatbot() {
           content: userMsg.content,
           image: image || null
         })
+        if (identityChanged()) return
         savedUser = saved.message
-        setMessages((m) => m.map((x) => (x.id === userMsg.id ? { ...saved.message, image: image || null } : x)))
+        if (!viewChanged()) {
+          setMessages((m) =>
+            m.map((x) => (x.id === userMsg.id ? { ...saved.message, image: image || null } : x))
+          )
+        }
         setChats((c) =>
           c.map((ch) => {
             if (ch.id !== chatId) return ch
@@ -228,21 +311,33 @@ export default function Chatbot() {
           : 'Sorry, the AI service is unavailable right now. Please try again in a moment.')
     }
 
+    // The account switched while the AI reply was in flight: the identity
+    // effect already reset this view — never paint or persist old data.
+    if (identityChanged()) return
+
     if (aiFailed) {
       // Show the failure in the conversation but don't persist it as an
       // assistant answer (it isn't one).
-      setMessages((m) => [
-        ...m,
-        { id: `tmp_err_${Date.now()}`, role: 'assistant', content: reply, title: 'CoinScan AI' }
-      ])
-      setTyping(false)
+      if (!viewChanged()) {
+        setMessages((m) => [
+          ...m,
+          { id: `tmp_err_${Date.now()}`, role: 'assistant', content: reply, title: 'CoinScan AI' }
+        ])
+        setTyping(false)
+      }
       return
     }
 
     if (chatId && savedUser) {
       try {
         const saved = await saveMessage(chatId, { role: 'assistant', content: reply })
-        setMessages((m) => [...m, { ...saved.message, title: 'CoinScan AI' }])
+        if (identityChanged()) return
+        // Always persist the reply to its own conversation server-side;
+        // only paint it when that conversation is still on screen.
+        if (!viewChanged()) {
+          setMessages((m) => [...m, { ...saved.message, title: 'CoinScan AI' }])
+          setTyping(false)
+        }
         setChats((c) =>
           c.map((ch) =>
             ch.id === chatId
@@ -250,33 +345,42 @@ export default function Chatbot() {
               : ch
           )
         )
-        setTyping(false)
         return
       } catch (e) {
         console.warn('Could not save the reply:', e?.message || e)
       }
     }
-    setMessages((m) => [
-      ...m,
-      { id: `tmp_${Date.now() + 1}`, role: 'assistant', content: reply, title: 'CoinScan AI' }
-    ])
-    setTyping(false)
+    if (!viewChanged()) {
+      setMessages((m) => [
+        ...m,
+        { id: `tmp_${Date.now() + 1}`, role: 'assistant', content: reply, title: 'CoinScan AI' }
+      ])
+      setTyping(false)
+    }
   }
 
   const onFile = (file) => {
     setAttachError('')
     if (!file) return
+    // A rejected file must not leave a stale previous preview attached:
+    // clear any current attachment so the preview and the error stay in
+    // sync (and send() never silently no-ops on an attachError).
     if (!file.type.startsWith('image/')) {
+      setAttach(null)
       setAttachError('Please choose an image file (JPG, PNG, WebP…).')
       return
     }
     if (file.size > MAX_IMAGE_FILE_BYTES) {
+      setAttach(null)
       setAttachError('Image is too large — maximum 4 MB. Please choose a smaller photo.')
       return
     }
     const reader = new FileReader()
     reader.onload = () => setAttach(reader.result)
-    reader.onerror = () => setAttachError('Could not read that file. Please try another image.')
+    reader.onerror = () => {
+      setAttach(null)
+      setAttachError('Could not read that file. Please try another image.')
+    }
     reader.readAsDataURL(file)
   }
 
@@ -303,6 +407,25 @@ export default function Chatbot() {
               </span>
               <span className="sidebar-history-count">{chats.length}</span>
             </div>
+            {deleteError && (
+              <div
+                className="chat-delete-error"
+                data-testid="chat-delete-error"
+                role="alert"
+                style={{
+                  fontSize: 12.5,
+                  color: '#f5828a',
+                  background: 'rgba(245,130,138,0.08)',
+                  border: '1px solid rgba(245,130,138,0.3)',
+                  borderRadius: 12,
+                  padding: '9px 12px',
+                  lineHeight: 1.45,
+                  margin: '2px 10px 6px'
+                }}
+              >
+                {deleteError}
+              </div>
+            )}
             <div className="chat-history-list">
               {chats.length === 0 ? (
                 <div className="chat-history-empty">

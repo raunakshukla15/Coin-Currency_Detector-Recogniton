@@ -1,6 +1,7 @@
 """Authentication endpoints backed by MySQL + JWT."""
 
 import re
+import sys
 
 import pymysql
 from fastapi import APIRouter, Header, HTTPException
@@ -56,7 +57,11 @@ def signup(body: SignUpIn):
             (username, email, password_hash),
         )
     except pymysql.MySQLError as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
+        # Never expose SQL/driver internals to the client — log the type only.
+        print(f"[auth] signup database error ({type(exc).__name__})", file=sys.stderr)
+        raise HTTPException(
+            status_code=500, detail="Database error while creating the account."
+        ) from exc
 
     token = security.create_token(user_id)
     return {"user": {"id": user_id, "email": email, "username": username}, "token": token}

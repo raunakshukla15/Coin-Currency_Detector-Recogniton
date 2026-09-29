@@ -1,11 +1,31 @@
 import { test, expect } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   uniqueUser,
   signup,
   trackPageErrors,
   seedCollection,
-  getCollection
+  getCollection,
+  seedScan,
+  apiToken,
+  BACKEND_URL
 } from './helpers.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const DBCHECK = path.join(__dirname, 'dbcheck.py')
+
+function dbRows(cmd, email) {
+  try {
+    return execFileSync('python', [DBCHECK, cmd, '--email', email], {
+      encoding: 'utf8',
+      timeout: 20_000
+    })
+  } catch (e) {
+    return `dbcheck failed: ${e.message}`
+  }
+}
 
 // Two server-seeded items: A has reference data (price/category), B is a
 // deliberately SPARSE AI-style item (no price, no match, no specs) used to
@@ -169,6 +189,71 @@ test.describe('Collection page', () => {
     await expect(page.getByText('Estimated Value')).toBeVisible()
     await expect(page.getByText('—').first()).toBeVisible()
     await expect(page.getByText(/₹150\b/)).toHaveCount(0)
+
+    expect(errors).toEqual([])
+  })
+
+  test('removing an item clears it from UI + DB, keeps History, rejects foreign deletes', async ({
+    page
+  }) => {
+    const errors = trackPageErrors(page)
+    const user = uniqueUser()
+    const other = uniqueUser()
+    await signup(page, user)
+    const token = await apiToken(page)
+
+    const coinId = `e2e-remove-${Date.now()}`
+    await seedCollection(page, [
+      {
+        coinId,
+        item: {
+          name: 'Removable Florin',
+          kind: 'coin',
+          country: 'Netherlands',
+          year: '1967',
+          category: 'Common',
+          price: 40
+        }
+      }
+    ])
+    await seedScan(page, {
+      items: [{ name: 'Removable Florin Scan', country: 'Netherlands', year: '1967', match: 84 }]
+    })
+
+    // 1) Present in UI and in the DB
+    await page.goto('/collection')
+    await expect(page.getByText('Removable Florin').first()).toBeVisible({ timeout: 15_000 })
+    expect(dbRows('collection', user.email), 'DB row exists before delete').toContain(coinId)
+
+    // 2) A different account cannot delete it (server scopes by owner -> 404)
+    const res = await page.request.post(`${BACKEND_URL}/api/auth/signup`, {
+      data: { username: other.username, email: other.email, password: other.password }
+    })
+    expect(res.status(), `foreign signup failed: ${await res.text()}`).toBe(200)
+    const otherToken = (await res.json()).token
+    const foreign = await page.request.delete(`${BACKEND_URL}/api/collection/${coinId}`, {
+      headers: { Authorization: `Bearer ${otherToken}` }
+    })
+    expect(foreign.status()).toBe(404)
+    expect(dbRows('collection', user.email), 'row survives foreign delete').toContain(coinId)
+
+    // 3) Owner deletes it (same API call the result view's
+    //    "Remove from collection" button makes; the Collection grid itself
+    //    has no remove control — see report)
+    const del = await page.request.delete(`${BACKEND_URL}/api/collection/${coinId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    expect(del.ok(), `owner delete failed: ${await del.text()}`).toBeTruthy()
+
+    // 4) Gone from the UI after reload and gone from the DB
+    await page.reload()
+    await expect(page.getByText('Removable Florin')).toHaveCount(0)
+    expect(dbRows('collection', user.email), 'DB row gone after delete').not.toContain(coinId)
+
+    // 5) History record is untouched by the collection removal
+    await page.goto('/history')
+    await expect(page.getByText('Removable Florin Scan').first()).toBeVisible({ timeout: 15_000 })
+    expect(dbRows('scans', user.email), 'scan row still in DB').toContain('Removable Florin Scan')
 
     expect(errors).toEqual([])
   })

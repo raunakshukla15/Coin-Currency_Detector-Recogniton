@@ -23,8 +23,9 @@ And (endpoint level, via FastAPI TestClient):
   13 /api/ai/identify 502 clean detail on upstream failure (no traceback)
   14 /api/ai/identify 502 clean detail on daily quota
   15 /api/ai/identify 200 happy path against the fake upstream
-  16 /api/ai/chat 502 clean detail; 401 without token
-  17 /api/contact input validation (same app)
+   16 /api/ai/chat 502 clean detail; 401 without token
+   17 /api/ai/chat non-dict message entries -> 422 (never 500)
+   18 /api/contact input validation (same app)
 """
 
 import base64
@@ -364,6 +365,39 @@ def t_endpoint_chat_502_and_401():
     expect(r2.status_code == 401, f"expected 401 without token, got {r2.status_code}")
 
 
+def t_endpoint_chat_bad_messages_422():
+    """Non-object message entries must be a clean 422, never a 500.
+
+    Regression: AIChatIn used to accept any list, so messages=["hi"] crashed
+    the chat formatter (AttributeError -> 500).
+    """
+    client, token = _client_and_token()
+    r = client.post(
+        "/api/ai/chat",
+        json={"messages": ["hi"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    expect(r.status_code == 422,
+           f"expected 422 for string messages, got {r.status_code}: {r.text}")
+    expect("Traceback" not in r.text, "422 leaked internals")
+    r2 = client.post(
+        "/api/ai/chat",
+        json={"messages": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    expect(r2.status_code == 422,
+           f"expected 422 for empty messages, got {r2.status_code}")
+    # Valid shape still passes validation (reaches the AI -> mocked 502).
+    control(scenario="e503")
+    r3 = client.post(
+        "/api/ai/chat",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    expect(r3.status_code == 502,
+           f"valid messages no longer reach AI: {r3.status_code}: {r3.text}")
+
+
 def t_endpoint_contact_validation():
     """Contact input validation lives in the same app (422 paths)."""
     from fastapi.testclient import TestClient
@@ -417,6 +451,7 @@ def main():
         ("POST /api/ai/identify 502 clean quota detail", t_endpoint_quota_502),
         ("POST /api/ai/identify 200 happy path", t_endpoint_identify_200),
         ("POST /api/ai/chat 502 clean detail + 401 no token", t_endpoint_chat_502_and_401),
+        ("POST /api/ai/chat non-dict messages -> 422, valid -> 502", t_endpoint_chat_bad_messages_422),
         ("POST /api/contact rejects invalid email/empty text", t_endpoint_contact_validation),
     ]
 

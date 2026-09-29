@@ -9,6 +9,17 @@
   State D  Database down              -> HTTP 500 with clean "Database error"
                                          detail, no traceback leak
   State E  Validation                 -> 422 for invalid email / empty text
+  State F  Recipient + content        -> rcpts == CONTACT_TO, body carries
+                                         name, sender email, rating, the
+                                         feedback text, submission id,
+                                         "Submitted at:" + "Linked account:",
+                                         CR/LF injection in name cannot
+                                         create extra headers
+  State G  SMTP creds unset           -> saved=true, emailSent=false,
+                                         emailReason=not_configured, row kept
+  State H  submissionId idempotency   -> retry: 1 row + 1 email; new id:
+                                         new row + new email
+  State I  Recipient configuration    -> config.CONTACT_TO == team inbox
 
 Run from the repo root:
     python tests/test_contact_smtp.py
@@ -230,6 +241,132 @@ def state_e_validation():
     expect(len(rows) == 0, f"422 must not write a DB row, found: {rows}")
 
 
+def state_f_recipient_and_content():
+    """Email goes to CONTACT_TO only; body carries name, sender email, rating,
+    the feedback text, timestamp, submission id + linkage; a CR/LF-laden
+    name cannot smuggle an extra header (Bcc) into the send."""
+    global CAPTURE_PROC
+    CAPTURE_PROC = start_capture("accept")
+    apply_smtp(True)
+    try:
+        sid = f"statef{int(time.time() * 1000)}"
+        probe_text = f"{MARKER} F recipient probe"
+        r = client().post("/api/contact", json={
+            "text": probe_text,
+            "rating": 5,
+            "email": "f-probe@coinscan-e2e.com",
+            "username": "Evil\r\nBcc: evil@x.example",
+            "submissionId": sid,
+        })
+        expect(r.status_code == 200, f"status {r.status_code}: {r.text}")
+        expect(r.json().get("emailSent") is True, f"emailSent: {r.json()}")
+        captured = read_capture()
+        expect(len(captured) == 1, f"captured {len(captured)} messages")
+        rec = captured[0]
+        expect(rec["rcpts"] == ["inbox@coinscan.test"],
+               f"wrong recipient(s): {rec['rcpts']} (want [CONTACT_TO])")
+        # Required content: name, email, rating, feedback, submission id
+        expect("Evil" in rec["body"], "sender name missing from email body")
+        expect("f-probe@coinscan-e2e.com" in rec["body"],
+               "sender email missing from email body")
+        expect("5/5" in rec["body"], "rating missing from email body")
+        expect(probe_text in rec["body"], "feedback text missing from email body")
+        expect(sid in rec["body"], "submission identifier missing from email body")
+        expect("Submitted at:" in rec["body"], "email body missing 'Submitted at:'")
+        expect("Linked account:" in rec["body"], "email body missing 'Linked account:'")
+        expect("Guest (not signed in)" in rec["body"],
+               "guest submission should be linked as Guest")
+        # Header injection: only the HEADER section (up to the blank line)
+        # can carry SMTP headers — no Bcc/Cc may appear there, and Subject
+        # must stay a single line. (Control chars in the plaintext body are
+        # harmless — the body is content, not headers.)
+        raw_norm = rec["raw"].replace("\r\n", "\n")
+        header_section = raw_norm.split("\n\n", 1)[0]
+        header_lines = header_section.split("\n")
+        expect(not any(ln.lower().startswith(("bcc:", "cc:")) for ln in header_lines),
+               f"injected header line found in header section: {header_lines}")
+        expect(sum(1 for ln in header_lines if ln.startswith("Subject:")) == 1,
+               f"Subject header not exactly one line: {header_lines}")
+        expect("\r" not in rec["subject"] and "\n" not in rec["subject"],
+               f"CR/LF leaked into subject: {rec['subject']!r}")
+        expect(rec["subject"].startswith("CoinScan Feedback (5/5) from Evil"),
+               f"bad subject after sanitize: {rec['subject']!r}")
+    finally:
+        stop_capture()
+        apply_smtp(False)
+
+
+def state_g_smtp_not_configured():
+    """SMTP creds unset: the row is still saved and the API reports the
+    honest reason not_configured (no send attempted, no crash)."""
+    orig_user, orig_pw = config.SMTP_USER, config.SMTP_PASSWORD
+    config.SMTP_USER, config.SMTP_PASSWORD = "", ""
+    try:
+        r = submit("G")
+        expect(r.status_code == 200, f"status {r.status_code}: {r.text}")
+        body = r.json()
+        expect(body.get("saved") is True, f"row must be saved: {body}")
+        expect(body.get("emailSent") is False, f"emailSent must be false: {body}")
+        expect(body.get("emailReason") == "not_configured",
+               f"emailReason must be not_configured: {body}")
+        rows = db_rows("G")
+        expect(len(rows) == 1, f"expected 1 DB row, got {len(rows)}")
+    finally:
+        config.SMTP_USER, config.SMTP_PASSWORD = orig_user, orig_pw
+
+
+def state_h_submission_dedupe():
+    """Same submissionId retried -> one row + one email; a NEW id -> new row."""
+    global CAPTURE_PROC
+    CAPTURE_PROC = start_capture("accept")
+    apply_smtp(True)
+    try:
+        sid = f"stateh{int(time.time() * 1000)}"
+        payload = {
+            "text": f"{MARKER} H dedupe probe", "rating": 2,
+            "email": "h-probe@coinscan-e2e.com", "username": "Dedupe",
+            "submissionId": sid,
+        }
+        r1 = client().post("/api/contact", json=payload)
+        expect(r1.status_code == 200 and r1.json().get("saved") is True,
+               f"first submit: {r1.status_code} {r1.text}")
+        expect(not r1.json().get("duplicate"), f"first submit flagged duplicate: {r1.json()}")
+        expect(len(read_capture()) == 1, "first submit must send exactly one email")
+
+        r2 = client().post("/api/contact", json=payload)
+        expect(r2.status_code == 200 and r2.json().get("duplicate") is True,
+               f"retry not deduped: {r2.status_code} {r2.text}")
+        expect(r2.json().get("saved") is True, f"retry must still read saved: {r2.json()}")
+        expect(len(read_capture()) == 1, "retry must not send a second email")
+        n_sid = db.fetch_one(
+            "SELECT COUNT(*) AS n FROM contact_messages WHERE submission_id = %s",
+            (sid,))["n"]
+        expect(n_sid == 1, f"expected 1 row for sid, got {n_sid}")
+
+        # Same text under a NEW id is a legitimate second submission.
+        payload2 = dict(payload, submissionId=f"stateh2{int(time.time() * 1000)}")
+        r3 = client().post("/api/contact", json=payload2)
+        expect(r3.status_code == 200 and r3.json().get("saved") is True
+               and not r3.json().get("duplicate"),
+               f"new sid submit: {r3.status_code} {r3.text}")
+        expect(len(read_capture()) == 2, "new sid must send its own email")
+        expect(len(db_rows("H dedupe")) == 2, "expected 2 rows total for H probes")
+    finally:
+        stop_capture()
+        apply_smtp(False)
+
+
+def state_i_recipient_configured():
+    """config.CONTACT_TO (env-overridable, default set in backend/config.py)
+    must be the team inbox — this is where delivery goes (state F proves the
+    rcpt follows the config)."""
+    apply_smtp(False)  # restore the real configuration (env/.env/defaults)
+    expect(
+        config.CONTACT_TO == "raunakbshukla133@gmail.com",
+        f"CONTACT_TO must be the team inbox, got {config.CONTACT_TO!r}",
+    )
+
+
 def main():
     global CAPTURE_PROC
     print("== Contact endpoint states (SMTP capture + DB) ==")
@@ -239,6 +376,12 @@ def main():
         ("C: SMTP rejects -> saved + emailSent=false, row persists", state_c_server_rejects),
         ("D: DB down -> 500 clean detail, no traceback", state_d_database_down),
         ("E: validation 422 (invalid email/text/rating)", state_e_validation),
+        ("F: recipient=CONTACT_TO, Submitted-at/linkage, no header injection",
+         state_f_recipient_and_content),
+        ("G: SMTP creds unset -> saved + emailReason=not_configured", state_g_smtp_not_configured),
+        ("H: submissionId retry -> 1 row + 1 email; new id -> new row",
+         state_h_submission_dedupe),
+        ("I: CONTACT_TO configured to the team inbox", state_i_recipient_configured),
     ]:
         check(name, fn)
 

@@ -86,7 +86,10 @@ class IdentifyIn(BaseModel):
 
 
 class AIChatIn(BaseModel):
-    messages: list = Field(min_length=1, max_length=100)
+    # Each message must be an object ({role, content, ...}); plain strings or
+    # other scalars would crash the chat formatter — reject them with 422
+    # instead of a 500.
+    messages: list[dict] = Field(min_length=1, max_length=100)
 
 
 @router.post("/ai/identify")
@@ -421,10 +424,16 @@ def add_collection_item(body: CollectionItemIn, user: dict = Depends(get_current
     payload = dict(body.item or {})
     payload.pop("image", None)
     payload.pop("imageId", None)
-    db.execute(
-        "INSERT INTO collection_items (user_id, coin_id, image_id, item_json) VALUES (%s, %s, %s, %s)",
-        (user["id"], body.coinId, image_id, json.dumps(payload, ensure_ascii=False)),
-    )
+    try:
+        db.execute(
+            "INSERT INTO collection_items (user_id, coin_id, image_id, item_json) VALUES (%s, %s, %s, %s)",
+            (user["id"], body.coinId, image_id, json.dumps(payload, ensure_ascii=False)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Unique key (user_id, coin_id) raced with a concurrent identical add.
+        if getattr(exc, "args", None) and exc.args and exc.args[0] == 1062:
+            return {"ok": True, "duplicate": True}
+        raise HTTPException(status_code=500, detail="Failed to save collection item.") from exc
     return {"ok": True}
 
 

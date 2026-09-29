@@ -41,6 +41,11 @@ __pycache__/
 *.py[cod]
 *.log
 
+# Python virtual environments (each teammate creates their own)
+.venv/
+venv/
+env/
+
 # Environment files
 .env
 **/.env
@@ -52,3 +57,4 @@ dist/
 # Test output
 test-results/
 tests/benchmark_results.json
+tests/servers/.smtp_capture.jsonl

@@ -21,6 +21,17 @@ function loadStored() {
   }
 }
 
+// Page-derived session data (e.g. the last identification preview) is
+// account-specific: clear it on every login/logout so one account's data
+// can never surface for another account in the same browser tab.
+function clearPageSessionData() {
+  try {
+    sessionStorage.removeItem('coinscan_lastident')
+  } catch (e) {
+    /* ignore */
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [token, setToken] = useState(null)
@@ -71,6 +82,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   const applySession = (u, t) => {
+    clearPageSessionData()
     setUser(u)
     setToken(t)
     persist({ user: u, token: t })
@@ -103,6 +115,7 @@ export function AuthProvider({ children }) {
     const t = token
     setUser(null)
     setToken(null)
+    clearPageSessionData()
     try {
       localStorage.removeItem(STORAGE_KEY)
     } catch (e) {
