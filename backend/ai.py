@@ -56,16 +56,71 @@ _AUTH_SEVERITY = {
     "SUSPICIOUS": 2,
     "LIKELY_COUNTERFEIT": 3,
 }
+# User-facing labels for the THREE preliminary assessment outcomes. Internal
+# statuses stay four-valued (history/DB compatibility); SUSPICIOUS and
+# LIKELY_COUNTERFEIT share the "Potentially suspicious" presentation.
+# "Likely genuine" is deliberately NOT a label: a photo can never confirm
+# genuineness, so the positive outcome only says no signs were seen.
 _AUTH_LABELS = {
-    "LIKELY_GENUINE": "Likely genuine",
-    "SUSPICIOUS": "Suspicious",
-    "LIKELY_COUNTERFEIT": "Likely counterfeit",
-    "UNABLE_TO_VERIFY": "Unable to verify",
+    "LIKELY_GENUINE": "No obvious suspicious signs detected",
+    "SUSPICIOUS": "Potentially suspicious",
+    "LIKELY_COUNTERFEIT": "Potentially suspicious",
+    "UNABLE_TO_VERIFY": "Inconclusive",
 }
-_AUTH_DISCLAIMER = (
-    " Assessment is based on image analysis only and does not replace physical "
-    "or forensic authentication."
+# Fixed limitations sentence carried by every assessment: a photograph
+# cannot verify unmeasured physical characteristics. Contains "verify"
+# (chatbot wording contract) but never any confidence percentage.
+_AUTH_LIMITATIONS = (
+    "Preliminary visual assessment from the uploaded photo only. A photograph "
+    "cannot verify metal composition, exact weight, magnetic properties, "
+    "diameter/tolerance, or any other physical characteristic that has not "
+    "been measured, and it does not confirm that the item is genuine."
 )
+_AUTH_DISCLAIMER = (
+    " This is a preliminary visual assessment only and does not replace "
+    "physical or forensic authentication."
+)
+
+
+def _auth_extras(status: str, *, physical_ok: bool = True) -> dict:
+    """label / limitations / next_steps for one assessment.
+
+    next_steps follows the assessment quality: inconclusive results ask for
+    clear photos of BOTH faces and the edge; suspicious results recommend
+    physical verification by a qualified authority; the positive outcome is
+    always explicit that it does NOT confirm authenticity.
+    """
+    label = _AUTH_LABELS.get(status, _AUTH_LABELS["UNABLE_TO_VERIFY"])
+    if not physical_ok:
+        next_steps = (
+            "Upload a clear photograph of a physical coin or banknote - "
+            "both faces, and the edge where practical - and scan again."
+        )
+    elif status == "UNABLE_TO_VERIFY":
+        next_steps = (
+            "Image quality, missing views, or a compromised photo prevented a "
+            "meaningful assessment. Please upload clear, well-lit photographs "
+            "of BOTH faces and of the edge (where practical), without added "
+            "text or annotations, and scan again."
+        )
+    elif status in ("SUSPICIOUS", "LIKELY_COUNTERFEIT"):
+        next_steps = (
+            "Visible differences were detected. Examine both faces and the "
+            "edge, compare with a trusted reference, and have the item "
+            "physically verified by a qualified authority (dealer, grading "
+            "service, or museum) before relying on it."
+        )
+    else:
+        next_steps = (
+            "No obvious suspicious signs were seen in this photo, which does "
+            "NOT confirm authenticity. If authenticity matters, have the item "
+            "physically verified by a qualified authority."
+        )
+    return {
+        "label": label,
+        "limitations": _AUTH_LIMITATIONS,
+        "next_steps": next_steps,
+    }
 
 IDENTIFY_PROMPT = """You are an expert numismatist vision analyst. The attached image may contain ONE OR MORE collectible objects: coins and/or paper currency notes (banknotes). Identify EVERY coin and EVERY currency note visible - one object per item - AND record factual visual observations for authenticity assessment.
 
@@ -115,6 +170,11 @@ For kind = "currency", use ONLY these fields:
 - "match" / "confidence" = RECOGNITION confidence only: how sure you are of WHAT the object is. It says NOTHING about genuineness. 90% recognition never means "90% genuine".
 - You do NOT choose an authenticity status. You only record honest factual observations from the pixels; a separate step maps observations to a status.
 
+=== DENOMINATION (read the printed numeral) ===
+- "denomination" must state the numeric value PRINTED ON the item itself (the numeral beside the currency symbol, e.g. "2", "5", "10") in exactly the format shown in the schema. Read that numeral from the pixels — NEVER infer the value from the coin's size, colour, shape, or resemblance to a similar-looking coin. Modern Indian circulation coins include ₹1, ₹2, ₹5, ₹10 and ₹20 and several look alike in photographs; also confirm WHICH face of the coin is visible and whether its numeral is actually legible before deciding.
+- Self-check before returning: for every coin, compare the numeral you can actually see with the number you wrote in "denomination" (and in the numeric part of "name"). If they disagree, correct them. If no numeral is legible (blur, glare, steep angle, heavy wear), set "confidence" to "low" and note "denomination not legible from image" in the description — never guess a standard value.
+- "type" is only a legacy display label; it must never override the visible numeral. The field examples above show FORMAT only — they are not the likely answer.
+
 === OBSERVATIONS SCHEMA (include under "observations" for EVERY item) ===
 Answer each field ONLY from what is actually visible in THIS image. Use true/false. Use null only when truly impossible to judge. Never guess a security feature you cannot see.
 
@@ -161,7 +221,11 @@ Extra fields for kind = "coin":
 {
   "monochrome_or_bad_photo": false,      // true if image is greyscale photocopy-style or too degraded to see the coin surface properly
   "casting_or_plating_defects": false,   // true only if you SEE casting seams, porous surface, plating bubbles/peeling - NOT normal wear
-  "design_matches_denomination": null    // true/false/null: does the visible design match the denomination you claimed?
+  "design_matches_denomination": null,   // true/false/null: does the visible design match the denomination you claimed?
+  "shape_and_symmetry_plausible": null,  // coin outline: false=irregular beyond wear, true=normal, null=outline not visible
+  "lettering_and_date_legible": null,    // coin lettering/date: false=garbled or inconsistent, true=legible, null=not visible
+  "edge_pattern_visible": null,          // coin edge: false=visible but inconsistent, true=visible and plausible, null=edge not visible
+  "unusual_surface_marks": false         // true only if unusual marks suggest alteration/repair; normal wear = false
 }
 
 Before writing the JSON, run this photocopy check explicitly: Look at ONLY the banknote region. Is it made of continuous-tone colour ink (even if muted), or does it look like black/grey toner on paper (photocopy/printout)? Do you see black alignment ticks, white cut-out borders, or the note laid on a passbook/ledger? If YES to a toner-only note OR cut/registration borders, set monochrome_reproduction and/or paper_cut_or_registration_marks to true. Then also answer: real photo vs artwork? SPECIMEN stamp? colour correct for series? design matches series? serials OK? damage/cut-paste? quality good enough to judge?
@@ -190,6 +254,10 @@ OBSERVE_PROMPT = """Look at the banknote/coin in this image and answer a fixed a
   "monochrome_or_bad_photo": false,
   "casting_or_plating_defects": false,
   "design_matches_denomination": null,
+  "shape_and_symmetry_plausible": null,
+  "lettering_and_date_legible": null,
+  "edge_pattern_visible": null,
+  "unusual_surface_marks": false,
   "on_bank_documents": false,
   "cut_out_with_borders": false,
   "registration_ticks": false,
@@ -215,6 +283,10 @@ Field rules:
 - monochrome_or_bad_photo (coins): true if greyscale photocopy-style or surface unreadable.
 - casting_or_plating_defects (coins): true only if casting seams, porosity, plating bubbles/peeling are VISIBLE (normal wear = false).
 - design_matches_denomination (coins): true/false/null whether visible design matches the claimed denomination.
+- shape_and_symmetry_plausible (coins): false only if the coin outline/symmetry is visibly irregular, warped, or asymmetric beyond normal wear; true if the outline looks normal; null if the full outline is not visible or cannot be judged. Banknotes: null.
+- lettering_and_date_legible (coins): false only if lettering or the date appears garbled, doubled, or internally inconsistent with the claimed coin; true if legible and consistent; null if not visible. Banknotes: null.
+- edge_pattern_visible (coins): false ONLY if the edge IS visible in the photo and its pattern (reeded, smooth, segmented, edge lettering) looks inconsistent for the claimed coin; true if visible and plausible; null if the edge is not visible in this photo. Banknotes: null.
+- unusual_surface_marks (coins): true only if unusual marks, tooling lines, or inconsistent surface detail suggest alteration or repair; normal circulation wear and light scratches are false. Banknotes: null.
 - on_bank_documents: a bank passbook, account statement, ledger, or bank form is visible UNDER or AROUND the note (readable bank name, account fields, branch text, logo). Plain white/green paper alone is false.
 - cut_out_with_borders: the note shape is framed by a white paper cut-out margin (scissors/cut border), i.e. the note was cut from a sheet and laid down.
 - registration_ticks: short black parallel printer alignment lines along the note paper edge.
@@ -291,7 +363,7 @@ Rules:
 - Recognition confidence (match %) is NOT proof of genuineness. Never call something genuine merely because it was recognized.
 - ANSWER THE USER'S ACTUAL QUESTION DIRECTLY first and conversationally. If asked "is it real or fake?", clearly say which it appears to be per the analysis, give the concrete reason(s) in 1-2 sentences, note what item/denomination was identified, and recommend physical verification when the status is not LIKELY_GENUINE.
 - If the analysis says LIKELY_GENUINE, do not call the item fake/counterfeit even if the note bears unusual printed words (e.g. SPECIMEN on a reference scan) — those are already accounted for in the assessment.
-- Phrase statuses naturally in words: "likely counterfeit", "suspicious", "likely genuine", "unable to verify from this image".
+- Phrase the assessment using the analysis's user-facing wording (its "label"): "no obvious suspicious signs detected" (never a genuineness claim), "potentially suspicious", or "inconclusive" - and when giving an authenticity answer, note that a photo cannot verify metal composition, weight, or magnetic properties.
 - If the analysis found no coin/banknote (items is empty [] or authenticity is null), the upload is NOT a supported currency/coin image. Start your reply with exactly: "This is not a supported currency/coin image." and briefly suggest uploading a clear photo of a coin or banknote. Do NOT invent an authenticity status for it.
 - Never claim verified/laboratory authentication. Keep the reply concise; only mention indicators present in the analysis.
 - If the user asks a non-authenticity question (history, value, mint marks, etc.), answer conversationally using the analysis and your numismatic knowledge.
@@ -835,10 +907,11 @@ def assess_from_observations(item: dict) -> dict | None:
     if physical is False:
         return {
             "status": "UNABLE_TO_VERIFY",
+            **_auth_extras("UNABLE_TO_VERIFY", physical_ok=False),
             "message": (
-                "Unable to verify. The image does not show a photograph of a "
-                "physical coin or banknote, so authenticity cannot be assessed."
-                + _AUTH_DISCLAIMER
+                f"{_AUTH_LABELS['UNABLE_TO_VERIFY']}. The image does not show "
+                "a photograph of a physical coin or banknote, so authenticity "
+                "cannot be assessed." + _AUTH_DISCLAIMER
             ),
             "indicators": [],
             "confidence": None,
@@ -874,11 +947,10 @@ def assess_from_observations(item: dict) -> dict | None:
                 )
             conf = None
             parts = [f"{_AUTH_LABELS[status]}. {reason}"]
-            if indicators:
-                parts.append("Visible indicators: " + "; ".join(indicators[:5]) + ".")
             parts.append(_AUTH_DISCLAIMER.strip())
             return {
                 "status": status,
+                **_auth_extras(status),
                 "message": " ".join(p.strip() for p in parts if p and p.strip())[:512],
                 "indicators": indicators,
                 "confidence": conf,
@@ -918,7 +990,7 @@ def assess_from_observations(item: dict) -> dict | None:
                 "rather than a photograph of an intact physical banknote."
             )
             indicators = copy_hits + strong_hits
-            conf = 85 if (scene or mono) else 75
+            conf = None
         elif strong_hits:
             # 4. Strong positive anomalies (colour wrong, design mismatch,
             #    serial fraud, cut/paste) -> LIKELY_COUNTERFEIT.
@@ -928,7 +1000,7 @@ def assess_from_observations(item: dict) -> dict | None:
                 "with a genuine example of this series."
             )
             indicators = strong_hits
-            conf = 75
+            conf = None
         elif overlay and overlay_blocks:
             # 4b. A compromising overlay/annotation was added to the photo.
             #     The annotation is not evidence about the note itself, and a
@@ -969,7 +1041,7 @@ def assess_from_observations(item: dict) -> dict | None:
             indicators = ["SPECIMEN overprint present (reference/sample note)"]
             if notes:
                 indicators.append(notes)
-            conf = 70
+            conf = None
         elif detail and color_ok is not False:
             # 6. Enough visible genuine characteristics, no anomaly observed.
             status = "LIKELY_GENUINE"
@@ -980,7 +1052,7 @@ def assess_from_observations(item: dict) -> dict | None:
             indicators = ["Expected design features visible", "No observed counterfeit indicators"]
             if notes:
                 indicators.append(notes)
-            conf = 75
+            conf = None
         else:
             status = "UNABLE_TO_VERIFY"
             reason = (
@@ -993,6 +1065,21 @@ def assess_from_observations(item: dict) -> dict | None:
         badphoto = _flag(o, "monochrome_or_bad_photo")
         defects = _flag(o, "casting_or_plating_defects")
         design_ok = o.get("design_matches_denomination")
+        # Weaker but concrete visual anomalies from the observation pass
+        # (each field is tri-state: false = anomaly seen, null = not visible).
+        anomaly_hits: list[str] = []
+        if o.get("shape_and_symmetry_plausible") is False:
+            anomaly_hits.append(
+                "Coin outline/symmetry appears irregular for a struck coin")
+        if o.get("lettering_and_date_legible") is False:
+            anomaly_hits.append(
+                "Lettering or date appears garbled or internally inconsistent")
+        if o.get("edge_pattern_visible") is False:
+            anomaly_hits.append(
+                "Visible edge pattern appears inconsistent with the identified coin")
+        if _flag(o, "unusual_surface_marks"):
+            anomaly_hits.append(
+                "Unusual surface marks or inconsistent detail visible")
 
         if blur or (badphoto and not defects):
             status = "UNABLE_TO_VERIFY"
@@ -1009,7 +1096,7 @@ def assess_from_observations(item: dict) -> dict | None:
                 "inconsistent with a genuine struck coin."
             )
             indicators = ["Casting seams, porous surface, or plating defects visible"]
-            conf = 75
+            conf = None
         elif design_ok is False:
             status = "SUSPICIOUS"
             reason = (
@@ -1017,7 +1104,18 @@ def assess_from_observations(item: dict) -> dict | None:
                 "claimed denomination and requires physical verification."
             )
             indicators = ["Visible design does not match claimed denomination"]
-            conf = 60
+            conf = None
+        elif anomaly_hits:
+            # 5b. Concrete but non-definitive visual anomalies (outline,
+            #     lettering, edge, surface) -> SUSPICIOUS: recommend physical
+            #     verification, never a genuineness claim, never auto-fake.
+            status = "SUSPICIOUS"
+            reason = (
+                f"The image of {name} shows visible differences in outline, "
+                "lettering, edge, or surface that require physical examination."
+            )
+            indicators = anomaly_hits
+            conf = None
         elif badphoto:
             status = "UNABLE_TO_VERIFY"
             reason = (
@@ -1054,7 +1152,7 @@ def assess_from_observations(item: dict) -> dict | None:
             indicators = ["Expected design features visible", "No observed casting/plating defects"]
             if notes:
                 indicators.append(notes)
-            conf = 70
+            conf = None
 
     # Acknowledge any photo-level overlay/annotation in the final reasoning,
     # whatever status the evidence chain produced (unless already cited).
@@ -1072,12 +1170,11 @@ def assess_from_observations(item: dict) -> dict | None:
         indicators = [notes]
 
     parts = [f"{_AUTH_LABELS[status]}. {reason}"]
-    if indicators:
-        parts.append("Visible indicators: " + "; ".join(indicators[:5]) + ".")
     parts.append(_AUTH_DISCLAIMER.strip())
     message = " ".join(p.strip() for p in parts if p and p.strip())
     return {
         "status": status,
+        **_auth_extras(status),
         "message": message[:512],
         "indicators": indicators,
         "confidence": conf,
@@ -1105,11 +1202,9 @@ def assess_authenticity(item: dict) -> dict:
     if status is None:
         status = "SUSPICIOUS" if indicators else "UNABLE_TO_VERIFY"
 
-    conf = item.get("authenticity_confidence")
-    try:
-        conf = max(0, min(100, int(conf))) if conf is not None else None
-    except (TypeError, ValueError):
-        conf = None
+    # No fabricated percentages: a photo-based assessment never reports a
+    # numeric authenticity confidence (legacy model-supplied values dropped).
+    conf = None
 
     default_reason = {
         "LIKELY_COUNTERFEIT": (
@@ -1131,12 +1226,11 @@ def assess_authenticity(item: dict) -> dict:
     }[status]
 
     parts = [f"{_AUTH_LABELS[status]}. {reason or default_reason}"]
-    if indicators:
-        parts.append("Visible indicators: " + "; ".join(indicators[:5]) + ".")
     parts.append(_AUTH_DISCLAIMER.strip())
     message = " ".join(p.strip() for p in parts if p and p.strip())
     return {
         "status": status,
+        **_auth_extras(status),
         "message": message[:512],
         "indicators": indicators,
         "confidence": conf,
@@ -1150,9 +1244,10 @@ def overall_authenticity(items: list) -> dict:
     if not assessments:
         return {
             "status": "UNABLE_TO_VERIFY",
+            **_auth_extras("UNABLE_TO_VERIFY", physical_ok=False),
             "message": (
-                "Authenticity cannot be verified from this image. "
-                + _AUTH_DISCLAIMER.strip()
+                "Inconclusive. No coin or banknote was identified in this "
+                "image, so no assessment can be made." + _AUTH_DISCLAIMER
             ),
             "indicators": [],
             "confidence": None,
@@ -1316,11 +1411,16 @@ def identify(image: str) -> dict:
         # assess_authenticity), never from a free-form LLM verdict.
         if isinstance(item.get("observations"), dict):
             for k in ("authenticity_status", "authenticity_reason",
-                      "authenticity_confidence", "visible_indicators"):
+                      "authenticity_confidence", "visible_indicators",
+                      "authenticity_label", "authenticity_limitations",
+                      "authenticity_next_steps"):
                 item.pop(k, None)
         auth = assess_authenticity(item)
         item["authenticity_status"] = auth["status"]
+        item["authenticity_label"] = auth["label"]
         item["authenticity_message"] = auth["message"]
+        item["authenticity_limitations"] = auth["limitations"]
+        item["authenticity_next_steps"] = auth["next_steps"]
         item["suspiciousIndicators"] = auth["indicators"]  # backward compat
         if auth["confidence"] is not None:
             item["authenticity_confidence"] = auth["confidence"]
@@ -1329,8 +1429,11 @@ def identify(image: str) -> dict:
         "items": items,
         "authenticity": {
             "status": overall["status"],
+            "label": overall["label"],
             "message": overall["message"],
             "indicators": overall["indicators"],
+            "limitations": overall["limitations"],
+            "next_steps": overall["next_steps"],
             "confidence": overall.get("confidence"),
         },
     }

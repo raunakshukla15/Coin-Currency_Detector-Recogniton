@@ -172,16 +172,31 @@ function enrichItem(item, opts) {
   return (item && item.kind === 'currency') ? enrichCurrency(item) : enrichCoin(item, opts)
 }
 
-// The four supported authenticity assessments. Recognition confidence (match %)
-// is ALWAYS separate — it only means "the AI recognized WHAT this is", never
-// "this % genuine". VERIFIED_AUTHENTIC is kept only to render legacy rows and
-// is treated as UNABLE_TO_VERIFY (image analysis can never verify genuineness).
+// The four supported authenticity assessments, shown with the app's three
+// required user-facing wordings: positive -> "No obvious suspicious signs
+// detected" (never a genuineness claim), SUSPICIOUS and LIKELY_COUNTERFEIT
+// -> "Potentially suspicious", UNABLE/legacy VERIFIED -> "Inconclusive".
+// Recognition confidence (match %) is ALWAYS separate — it only means "the
+// AI recognized WHAT this is", never "this % genuine".
 const AUTH_META = {
-  LIKELY_COUNTERFEIT: { label: 'Likely counterfeit', cls: 'badge-danger', Icon: ShieldAlert, tone: 'danger' },
-  SUSPICIOUS: { label: 'Suspicious', cls: 'badge-warn', Icon: ShieldAlert, tone: 'warn' },
-  LIKELY_GENUINE: { label: 'Likely genuine', cls: 'badge-success', Icon: BadgeCheck, tone: 'ok' },
-  UNABLE_TO_VERIFY: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion, tone: 'neutral' },
-  VERIFIED_AUTHENTIC: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion, tone: 'neutral' }
+  LIKELY_COUNTERFEIT: { label: 'Potentially suspicious', cls: 'badge-danger', Icon: ShieldAlert, tone: 'danger' },
+  SUSPICIOUS: { label: 'Potentially suspicious', cls: 'badge-warn', Icon: ShieldAlert, tone: 'warn' },
+  LIKELY_GENUINE: { label: 'No obvious suspicious signs detected', cls: 'badge-success', Icon: BadgeCheck, tone: 'ok' },
+  UNABLE_TO_VERIFY: { label: 'Inconclusive', cls: 'badge-neutral', Icon: ShieldQuestion, tone: 'neutral' },
+  VERIFIED_AUTHENTIC: { label: 'Inconclusive', cls: 'badge-neutral', Icon: ShieldQuestion, tone: 'neutral' }
+}
+
+// Fixed limitations / next-step texts for legacy stored rows that predate
+// the backend fields (wording mirrors backend ai.py _auth_extras()).
+const AUTH_LIMITATIONS_FALLBACK =
+  'Preliminary visual assessment from the uploaded photo only. A photograph ' +
+  'cannot verify metal composition, exact weight, magnetic properties, ' +
+  'diameter/tolerance, or any other physical characteristic that has not ' +
+  'been measured, and it does not confirm that the item is genuine.'
+const AUTH_NEXT_STEPS_FALLBACK = {
+  UNABLE: 'Image quality, missing views, or a compromised photo prevented a meaningful assessment. Please upload clear, well-lit photographs of BOTH faces and of the edge (where practical), without added text or annotations, and scan again.',
+  SUSPICIOUS: 'Visible differences were detected. Examine both faces and the edge, compare with a trusted reference, and have the item physically verified by a qualified authority (dealer, grading service, or museum) before relying on it.',
+  GENUINE: 'No obvious suspicious signs were seen in this photo, which does NOT confirm authenticity. If authenticity matters, have the item physically verified by a qualified authority.'
 }
 
 function authMeta(status) {
@@ -193,11 +208,26 @@ function authenticityFor(item, overall) {
   // No uploaded-image analysis => do not invent a status.
   const status = item?.authenticity_status || overall?.status || null
   if (!status) return null
-  const message =
-    item?.authenticity_message ||
-    overall?.message ||
-    'Authenticity cannot be determined from this image.'
-  return { status, message }
+  const meta = authMeta(status)
+  const bucket =
+    status === 'LIKELY_GENUINE'
+      ? 'GENUINE'
+      : status === 'UNABLE_TO_VERIFY' || status === 'VERIFIED_AUTHENTIC'
+        ? 'UNABLE'
+        : 'SUSPICIOUS'
+  const indicators = (item?.suspiciousIndicators || overall?.indicators || []).filter(Boolean)
+  return {
+    status,
+    label: item?.authenticity_label || overall?.label || meta.label,
+    message:
+      item?.authenticity_message ||
+      overall?.message ||
+      'Authenticity cannot be determined from this image.',
+    indicators,
+    limitations: item?.authenticity_limitations || overall?.limitations || AUTH_LIMITATIONS_FALLBACK,
+    nextSteps:
+      item?.authenticity_next_steps || overall?.next_steps || AUTH_NEXT_STEPS_FALLBACK[bucket]
+  }
 }
 
 function formatValue(code, inrValue) {
@@ -473,10 +503,26 @@ export default function IdentificationResult() {
                         className={`badge ${meta.cls}`}
                         style={{ marginBottom: 4, display: 'inline-flex' }}
                       >
-                        Authenticity: {meta.label}
+                        Authenticity: {auth.label}
                       </span>
                       <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55, marginTop: 4 }}>
                         {auth.message}
+                      </div>
+                      {auth.indicators.length > 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
+                          <div style={{ fontWeight: 700 }}>Visible warning signs</div>
+                          <ul style={{ margin: '3px 0 0', paddingLeft: 16 }}>
+                            {auth.indicators.slice(0, 6).map((ind, i) => (
+                              <li key={i} style={{ lineHeight: 1.5 }}>{ind}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5, marginTop: 6 }}>
+                        {auth.limitations}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.5, marginTop: 4 }}>
+                        <strong style={{ fontWeight: 700 }}>Next steps:</strong> {auth.nextSteps}
                       </div>
                     </div>
                   </div>

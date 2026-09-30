@@ -74,8 +74,9 @@ test.describe('Auth + data persistence', () => {
     await expect(page.getByText(/\d+%\s*Match/).first()).toBeVisible()
 
     // The seeded authenticity status from the server is shown with its
-    // proper label (LIKELY_GENUINE -> "Likely genuine"), never invented
-    await expect(page.getByText(/Likely genuine/i)).toBeVisible()
+    // proper label (LIKELY_GENUINE -> "No obvious suspicious signs
+    // detected"), never invented
+    await expect(page.getByText(/No obvious suspicious signs detected/i)).toBeVisible()
 
     // Back to history, delete the scan, verify it is gone on the server too
     await page.goto('/history')

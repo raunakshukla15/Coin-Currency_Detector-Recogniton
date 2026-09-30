@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { uniqueUser, signup, trackPageErrors, FIXTURE_NOTE } from './helpers.js'
 
 const ALLOWED_AUTH_STATUS =
-  /Authenticity:\s*(Likely genuine|Suspicious|Likely counterfeit|Unable to verify)/i
+  /Authenticity:\s*(No obvious suspicious signs detected|Potentially suspicious|Inconclusive)/i
 
 test.describe('Currency identification end-to-end (real AI)', () => {
   test('H/I/J: upload note → identify → result shows items + allowed authenticity status', async ({

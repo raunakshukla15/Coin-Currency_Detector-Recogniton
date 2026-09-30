@@ -74,7 +74,7 @@ test.describe('Image upload + recognition (mocked AI) and scan history', () => {
     await expect(page.getByRole('heading', { name: 'Mock Rupee' })).toBeVisible()
     await expect(page.getByText('INDIA', { exact: true }).first()).toBeVisible()
     await expect(page.getByText(/91% Match/)).toBeVisible()
-    await expect(page.getByText(/Authenticity: Likely genuine/)).toBeVisible()
+    await expect(page.getByText(/Authenticity: No obvious suspicious signs detected/)).toBeVisible()
     await expect(page.getByText('Estimated Value')).toBeVisible()
     await expect(page.getByText(/Coin Identified/)).toBeVisible()
 

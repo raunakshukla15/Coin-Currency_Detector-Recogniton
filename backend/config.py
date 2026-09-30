@@ -15,6 +15,18 @@ MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "coinscan")
 
+# TLS for the MySQL connection (required by managed hosts such as Aiven).
+# When enabled, server-certificate and hostname verification are ALWAYS
+# enforced — there is deliberately no option to disable verification.
+MYSQL_SSL = os.getenv("MYSQL_SSL", "").strip().lower() in ("1", "true", "yes", "on")
+# Optional path to the CA bundle used to verify the server certificate.
+# Aiven provides a per-service `ca.pem` (download from the service page).
+# Relative paths resolve against the backend/ directory.
+MYSQL_SSL_CA = os.getenv("MYSQL_SSL_CA", "").strip()
+# Optional client certificate/key (not required by Aiven's avnadmin user).
+MYSQL_SSL_CERT = os.getenv("MYSQL_SSL_CERT", "").strip()
+MYSQL_SSL_KEY = os.getenv("MYSQL_SSL_KEY", "").strip()
+
 # Secret used to sign JWT access tokens (change in production!)
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
 JWT_ALGORITHM = "HS256"

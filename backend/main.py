@@ -35,6 +35,25 @@ try:
 except ai.AIError as exc:
     raise RuntimeError(str(exc)) from exc
 
+# --- Automatic schema initialization (idempotent, startup-time, no endpoint) ---
+# Creates ONLY missing tables in the configured MYSQL_DATABASE. Existing
+# tables/rows are never touched; CREATE DATABASE / USE / DROP statements in
+# schema.sql are never executed (see dbinit.py). Failures are logged with
+# table names only — never passwords, JWT secrets, or API keys — and do not
+# crash boot, so /api/health keeps working while the database is unreachable.
+try:
+    from dbinit import init_schema
+
+    init_schema()
+except Exception as exc:  # noqa: BLE001
+    print(f"[dbinit] ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+    print(
+        "[dbinit] database schema initialization failed — data endpoints will "
+        "return errors until the database is reachable and configured "
+        "correctly (check MYSQL_* and MYSQL_SSL_* settings above).",
+        file=sys.stderr,
+    )
+
 app = FastAPI(title="CoinScan API", version="1.1.0")
 
 if config.APP_ENV == "production":

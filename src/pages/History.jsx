@@ -11,11 +11,11 @@ import { fetchScans, deleteScan, clearScans, fetchImageDataUrl } from '../api.js
 // Same four authenticity assessments as the result page (legacy
 // VERIFIED_AUTHENTIC rows render as unverified).
 const AUTH_META = {
-  LIKELY_COUNTERFEIT: { label: 'Likely counterfeit', cls: 'badge-danger', Icon: ShieldAlert },
-  SUSPICIOUS: { label: 'Suspicious', cls: 'badge-warn', Icon: ShieldAlert },
-  LIKELY_GENUINE: { label: 'Likely genuine', cls: 'badge-success', Icon: BadgeCheck },
-  UNABLE_TO_VERIFY: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion },
-  VERIFIED_AUTHENTIC: { label: 'Unable to verify', cls: 'badge-neutral', Icon: ShieldQuestion }
+  LIKELY_COUNTERFEIT: { label: 'Potentially suspicious', cls: 'badge-danger', Icon: ShieldAlert },
+  SUSPICIOUS: { label: 'Potentially suspicious', cls: 'badge-warn', Icon: ShieldAlert },
+  LIKELY_GENUINE: { label: 'No obvious suspicious signs detected', cls: 'badge-success', Icon: BadgeCheck },
+  UNABLE_TO_VERIFY: { label: 'Inconclusive', cls: 'badge-neutral', Icon: ShieldQuestion },
+  VERIFIED_AUTHENTIC: { label: 'Inconclusive', cls: 'badge-neutral', Icon: ShieldQuestion }
 }
 
 function authMeta(status) {
