@@ -1,8 +1,9 @@
 import os
 import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from auth import router as auth_router
 from contact import router as contact_router
@@ -70,6 +71,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Unhandled exceptions must still be CORS-safe ---
+# ServerErrorMiddleware (which dispatches this handler) sits OUTSIDE the CORS
+# middleware, so a response built here never receives Access-Control-Allow-
+# Origin automatically: without these headers the browser gets a bare 500 and
+# reports a misleading CORS error instead of the real failure. The origin is
+# echoed ONLY when it is on the allow-list (arbitrary origins are not
+# reflected). The full error goes to stderr (Render logs); uvicorn also
+# re-raises it for logging. The body carries the exception CLASS NAME only —
+# never str(exc) — because driver/exception messages can embed host, user or
+# SQL details that must never reach the browser.
+def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    origin = request.headers.get("origin", "")
+    headers = {"Vary": "Origin"}
+    if origin and origin in CORS_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+    print(
+        f"[error] {request.method} {request.url.path}: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error ({type(exc).__name__})."},
+        headers=headers,
+    )
+
+
+app.add_exception_handler(Exception, _unhandled_exception_handler)
 
 app.include_router(auth_router)
 app.include_router(contact_router)

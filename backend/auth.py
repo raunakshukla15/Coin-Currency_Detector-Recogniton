@@ -42,9 +42,18 @@ def signup(body: SignUpIn):
     username = body.username.strip()
     email = body.email.strip()
 
-    existing = db.fetch_one(
-        "SELECT id FROM users WHERE username = %s OR email = %s", (username, email)
-    )
+    try:
+        existing = db.fetch_one(
+            "SELECT id FROM users WHERE username = %s OR email = %s", (username, email)
+        )
+    except pymysql.MySQLError as exc:
+        # Same guard as the INSERT below: connection/TLS/table failures here
+        # used to escape as an unhandled exception, so the browser received a
+        # bare 500 without CORS headers (reported as a CORS error).
+        print(f"[auth] signup lookup database error ({type(exc).__name__})", file=sys.stderr)
+        raise HTTPException(
+            status_code=500, detail="Database error while checking the account."
+        ) from exc
     if existing:
         raise HTTPException(
             status_code=409, detail="An account with that username or email already exists."
