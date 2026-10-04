@@ -5,7 +5,7 @@ import PageHeader from '../components/PageHeader.jsx'
 import Button from '../components/Button.jsx'
 import Modal from '../components/Modal.jsx'
 import PageLayout from '../components/PageLayout.jsx'
-import { identifyItems, saveScan } from '../api.js'
+import { identifyItems, saveScan, downscaleImage } from '../api.js'
 
 async function persistScan(items, image, authenticity) {
   // Save to the logged-in user's server-side history (MySQL). Failure must
@@ -122,10 +122,11 @@ export default function Home() {
             'This is not a supported currency/coin image. Please upload a clear photo of a coin or banknote.'
         )
       }
-      await persistScan(items, preview, authenticity)
+      const stored = await downscaleImage(preview, 1024).catch(() => preview)
+      await persistScan(items, stored, authenticity)
       sessionStorage.setItem(
         'coinscan_lastident',
-        JSON.stringify({ items, image: preview || null, authenticity: authenticity || null })
+        JSON.stringify({ items, image: stored || null, authenticity: authenticity || null })
       )
       nav('/result')
     } catch (e) {

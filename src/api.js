@@ -1,7 +1,24 @@
 // All AI calls go through the FastAPI backend (/api/ai/*). The Gemini key
 // lives ONLY in backend/.env and is never exposed to the browser.
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api'
+// Resolve the API base so the '/api' prefix appears EXACTLY once:
+//   - dev + Playwright e2e (`vite dev`): relative '/api' keeps the current
+//     behavior — the vite dev proxy forwards it to http://localhost:8000.
+//   - production build (`vite build`): the deployed FastAPI backend on
+//     Render, so browser calls go to https://coinscan.onrender.com/api/*
+//     instead of the static Cloudflare Worker origin (which has no backend
+//     and answers 404). VITE_BACKEND_URL still overrides both.
+export function normalizeApiBase(raw) {
+  let b = String(raw ?? '').trim().replace(/\/+$/, '')
+  while (b.endsWith('/api/api')) b = b.slice(0, -4)
+  if (!b.endsWith('/api')) b = `${b}/api`
+  return b
+}
+
+export const API_BASE = normalizeApiBase(
+  import.meta.env.VITE_BACKEND_URL ||
+    (import.meta.env.PROD ? 'https://coinscan.onrender.com' : '/api')
+)
 
 export function isBackendError(e) {
   return Boolean(e && (e.name === 'BackendError' || e.status !== undefined || e.wasBackend))
@@ -48,7 +65,7 @@ async function backendRequest(path, options = {}) {
 
   let res
   try {
-    res = await fetch(`${BACKEND_URL}${path}`, {
+    res = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers
     })
@@ -99,6 +116,16 @@ export function authLogout(token) {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` }
   }).catch(() => null)
+}
+
+// Permanently delete the signed-in account (server verifies the password).
+// The caller must clear local session state ONLY after this resolves ok.
+export function authDeleteAccount(token, password) {
+  return backendRequest('/auth/account', {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ password })
+  })
 }
 
 // ---------- Contact Us ----------
@@ -189,10 +216,11 @@ export function fetchScans() {
   return backendRequest('/scans')
 }
 
-export function saveScan({ items, image = null, authenticity = null }) {
+export async function saveScan({ items, image = null, authenticity = null }) {
+  const stored = image ? await downscaleImage(image, 1024).catch(() => image) : null
   return backendRequest('/scans', {
     method: 'POST',
-    body: JSON.stringify({ items, image, authenticity })
+    body: JSON.stringify({ items, image: stored, authenticity })
   })
 }
 
@@ -221,10 +249,11 @@ export function fetchMessages(chatId) {
   return backendRequest(`/chats/${chatId}/messages`)
 }
 
-export function saveMessage(chatId, { role, content, image = null }) {
+export async function saveMessage(chatId, { role, content, image = null }) {
+  const stored = image ? await downscaleImage(image, 1024).catch(() => image) : null
   return backendRequest(`/chats/${chatId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ role, content, image })
+    body: JSON.stringify({ role, content, image: stored })
   })
 }
 
@@ -240,7 +269,7 @@ export async function fetchImageDataUrl(imageId) {
   if (!token) return null
   let res
   try {
-    res = await fetch(`${BACKEND_URL}/images/${imageId}`, {
+    res = await fetch(`${API_BASE}/images/${imageId}`, {
       headers: { Authorization: `Bearer ${token}` }
     })
   } catch (e) {
@@ -262,10 +291,11 @@ export function fetchCollection() {
   return backendRequest('/collection')
 }
 
-export function addCollectionItem(coinId, item, image = null) {
+export async function addCollectionItem(coinId, item, image = null) {
+  const stored = image ? await downscaleImage(image, 1024).catch(() => image) : null
   return backendRequest('/collection', {
     method: 'POST',
-    body: JSON.stringify({ coinId, item, image })
+    body: JSON.stringify({ coinId, item, image: stored })
   })
 }
 

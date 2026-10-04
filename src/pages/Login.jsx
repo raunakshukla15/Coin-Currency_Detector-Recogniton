@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { User, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import Logo from '../components/Logo.jsx'
 import BackgroundFX from '../components/BackgroundFX.jsx'
@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext.jsx'
 
 export default function Login() {
   const nav = useNavigate()
+  const loc = useLocation()
   const { login } = useAuth()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
@@ -15,6 +16,20 @@ export default function Login() {
   const [shake, setShake] = useState(false)
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState('')
+  // One-shot success notice after account deletion. The flag is written by
+  // the deletion flow and consumed here; re-checked on every location change
+  // because RequireAuth may mount this page before the flag exists.
+  const [accountDeleted, setAccountDeleted] = useState(false)
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('coinscan_account_deleted')) {
+        sessionStorage.removeItem('coinscan_account_deleted')
+        setAccountDeleted(true)
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }, [loc])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -64,6 +79,24 @@ export default function Login() {
               <span className="teal">Scan</span>
             </h2>
             <p style={{ margin: 0, fontSize: 15, color: 'var(--text-muted)' }}>Log in to continue your journey</p>
+
+            {accountDeleted && (
+              <div
+                data-testid="account-deleted-notice"
+                style={{
+                  marginTop: 18,
+                  fontSize: 13,
+                  color: 'var(--accent)',
+                  background: 'rgba(0,229,195,0.08)',
+                  border: '1px solid rgba(0,229,195,0.3)',
+                  borderRadius: 12,
+                  padding: '11px 14px',
+                  lineHeight: 1.5
+                }}
+              >
+                Your account and all of its data have been permanently deleted.
+              </div>
+            )}
 
             <form onSubmit={submit} style={{ marginTop: 34, display: 'flex', flexDirection: 'column', gap: 18 }} noValidate>
               <div>

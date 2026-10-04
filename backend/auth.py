@@ -4,10 +4,11 @@ import re
 import sys
 
 import pymysql
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 
 import db
+import deps
 import security
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -30,6 +31,11 @@ class MeOut(BaseModel):
     id: int
     email: str
     username: str
+
+
+class DeleteAccountIn(BaseModel):
+    # Non-empty password is required; the identity comes ONLY from the JWT.
+    password: str = Field(min_length=1, max_length=128)
 
 
 @router.get("/health")
@@ -118,3 +124,50 @@ def me(authorization: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Account no longer exists")
 
     return {"id": user["id"], "email": user["email"], "username": user["username"]}
+
+
+@router.delete("/account")
+def delete_account(body: DeleteAccountIn, user: dict = Depends(deps.get_current_user)):
+    """Permanently delete the authenticated account and everything it owns.
+
+    Identity comes exclusively from the verified JWT (get_current_user also
+    proves the account still exists). The re-entered password is verified
+    against the stored hash BEFORE any row is touched; a wrong password
+    changes nothing. All deletes run in one transaction and are committed
+    only when every statement succeeded.
+    """
+    row = db.fetch_one(
+        "SELECT id, password_hash FROM users WHERE id = %s", (user["id"],)
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Account no longer exists")
+    if not security.verify_password(body.password, row["password_hash"]):
+        raise HTTPException(status_code=403, detail="Incorrect password.")
+
+    uid = row["id"]
+    try:
+        with db.transaction() as cur:
+            # Children first so the order is safe with or without the
+            # ON DELETE CASCADE/SET NULL foreign keys. Every statement is
+            # scoped to this one user_id — never a broad delete.
+            cur.execute("DELETE FROM contact_messages WHERE user_id = %s", (uid,))
+            cur.execute("DELETE FROM chat_messages WHERE user_id = %s", (uid,))
+            cur.execute("DELETE FROM chats WHERE user_id = %s", (uid,))
+            cur.execute("DELETE FROM scan_history WHERE user_id = %s", (uid,))
+            cur.execute("DELETE FROM collection_items WHERE user_id = %s", (uid,))
+            cur.execute("DELETE FROM user_images WHERE user_id = %s", (uid,))
+            cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            if cur.rowcount != 1:
+                # Concurrently removed by another request — nothing was left
+                # to delete; roll back and report, never claim success.
+                raise HTTPException(status_code=401, detail="Account no longer exists")
+    except HTTPException:
+        raise
+    except pymysql.MySQLError as exc:
+        # Transaction already rolled back — no partial deletion can persist.
+        print(f"[auth] delete account database error ({type(exc).__name__})", file=sys.stderr)
+        raise HTTPException(
+            status_code=500, detail="Database error while deleting the account."
+        ) from exc
+
+    return {"ok": True}

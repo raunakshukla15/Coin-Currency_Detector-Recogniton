@@ -13,7 +13,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const CONTACT_INFO = [
   { icon: Users, label: 'Made by', value: 'Team 5' },
   { icon: Phone, label: 'Contact Number', value: '9561119717' },
-  { icon: Mail, label: 'Email', value: 'raunakbshukla133@gmail.com' },
+  { icon: Mail, label: 'Email', value: 'archanark1013@gmail.com' },
   { icon: MapPin, label: 'Location', value: 'India' }
 ]
 
@@ -80,7 +80,11 @@ export default function Contact() {
       })
     } catch (e) {
       console.error('Contact submission failed:', e)
-      setFormError(e?.message || 'Could not send your feedback. Please try again.')
+      setFormError(
+        e?.status
+          ? 'Your feedback could not be saved. Please try again.'
+          : e?.message || 'Could not send your feedback. Please try again.'
+      )
     } finally {
       setSending(false)
     }
@@ -120,8 +124,8 @@ export default function Contact() {
                 {outcome.duplicate
                   ? 'Your feedback was already received — no need to send it again.'
                   : outcome.emailSent
-                    ? 'Your message was saved and emailed to the team. The Team 5 reads every message.'
-                    : 'Your message was saved on the server, but email delivery to the team failed — it is stored and will be visible to the team from the database.'}
+                    ? 'Your feedback was saved successfully, and an email notification was sent to the team.'
+                    : 'Your feedback was saved successfully, but the email notification could not be delivered. Your message is retained in the database.'}
               </div>
               <button className="btn btn-primary btn-md" data-testid="contact-send-another" onClick={resetForm} style={{ marginTop: 8 }}>
                 <RefreshCw size={15} /> Send another message

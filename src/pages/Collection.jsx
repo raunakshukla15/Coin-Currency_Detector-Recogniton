@@ -26,7 +26,7 @@ const SORTS = ['Rarity: High to Low', 'Rarity: Low to High', 'Newest', 'Oldest']
 
 export default function Collection() {
   const nav = useNavigate()
-  const { collection, toggleFavorite } = useCollection()
+  const { collection, toggleFavorite, saveError } = useCollection()
   const [category, setCategory] = useState('All')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState('Rarity: High to Low')
@@ -179,6 +179,26 @@ export default function Collection() {
               </button>
             </div>
           </div>
+
+          {saveError && (
+            <div
+              className="collection-save-error"
+              data-testid="collection-save-error"
+              role="alert"
+              style={{
+                fontSize: 12.5,
+                color: '#f5828a',
+                background: 'rgba(245,130,138,0.08)',
+                border: '1px solid rgba(245,130,138,0.3)',
+                borderRadius: 12,
+                padding: '9px 12px',
+                lineHeight: 1.45,
+                marginBottom: 14
+              }}
+            >
+              {saveError}
+            </div>
+          )}
 
           {filtered.length === 0 ? (
             <GlassCard className="glass-interior" style={{ padding: '60px 20px', textAlign: 'center' }}>

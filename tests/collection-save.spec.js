@@ -10,8 +10,8 @@ import {
   FIXTURE_NOTE
 } from './helpers.js'
 
-// Collection save (CollectionContext.addCoin) regression tests: an optimistic
-// add must never keep looking successful when the POST fails — it rolls back,
+// Collection mutation regression tests: an optimistic add/remove/favorite
+// must never keep looking successful when the API call fails — it rolls back,
 // shows an honest error, and allows a retry; a failure resolving across an
 // account switch must never touch the new account's data or view.
 // AI identify is MOCKED (no Gemini quota); collection uses the real e2e DB.
@@ -210,6 +210,102 @@ test.describe('Collection save failure handling (rollback + honest error)', () =
     await expect(page.getByRole('button', { name: /add to collection/i })).toBeVisible()
     // …and B's collection data is untouched: exactly B's own item
     expect((await getCollection(page)).map((c) => c?.id)).toEqual([betaId])
+
+    expect(errors).toEqual([])
+  })
+
+  test('failed remove: item is restored in the view, honest error, DB row survives', async ({
+    page
+  }) => {
+    const errors = trackPageErrors(page)
+    const user = uniqueUser()
+    await signup(page, user)
+
+    await mockIdentify(page)
+    await gotoResult(page)
+    await page.getByRole('button', { name: /add to collection/i }).click()
+    await expect(page.getByRole('button', { name: /remove from collection/i })).toBeVisible()
+    await expect
+      .poll(async () => (await getCollection(page)).some((c) => c?.name === 'Mock Rupee'), {
+        timeout: 15_000
+      })
+      .toBe(true)
+
+    // The DELETE fails; GETs and everything else pass through untouched
+    await page.route('**/api/collection**', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Remove rejected (mock).' })
+        })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.getByRole('button', { name: /remove from collection/i }).click()
+
+    // Honest error replaces the optimistic "Removed…" toast
+    await expect(
+      page.getByText(/couldn.t remove this item from your collection/i)
+    ).toBeVisible({ timeout: 10_000 })
+    // Rollback: the item is still considered collected (remove button back)
+    await expect(page.getByRole('button', { name: /remove from collection/i })).toBeVisible()
+
+    // DB truth: the row survived the failed remove; other items untouched
+    expect((await getCollection(page)).some((c) => c?.name === 'Mock Rupee')).toBe(true)
+
+    // Reload with a healthy API: the item is still there (nothing silently
+    // disappeared from the UI while staying on the server)
+    await page.unroute('**/api/collection**')
+    await page.goto('/collection')
+    await expect(page.getByText('Mock Rupee').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(/couldn.t remove this item/i)).toHaveCount(0)
+
+    expect(errors).toEqual([])
+  })
+
+  test('failed favorite toggle: heart reverts, honest error, server value untouched', async ({
+    page
+  }) => {
+    const errors = trackPageErrors(page)
+    const user = uniqueUser()
+    await signup(page, user)
+    await seedCollection(page, [
+      { coinId: `fav-${TS}`, item: { ...item('Favorite Probe Coin'), favorite: false } }
+    ])
+
+    // The favorite PATCH fails; GETs pass through
+    await page.route('**/api/collection**', async (route) => {
+      if (route.request().method() === 'PATCH') {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Favorite rejected (mock).' })
+        })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.goto('/collection')
+    await expect(page.getByText('Favorite Probe Coin').first()).toBeVisible({ timeout: 15_000 })
+    await page.getByRole('button', { name: /list view/i }).click()
+
+    const heartIcon = page.locator('button[aria-label="Toggle favorite"] svg').first()
+    await expect(heartIcon).toHaveAttribute('fill', 'none')
+    await page.locator('button[aria-label="Toggle favorite"]').first().click()
+
+    // Honest error surfaces inline on the Collection page
+    await expect(page.getByTestId('collection-save-error')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(/couldn.t update your favorite/i)).toBeVisible()
+    // The optimistic flip rolled back — the heart is unfilled again
+    await expect(heartIcon).toHaveAttribute('fill', 'none')
+
+    // Server value untouched by the failed toggle
+    const items = await getCollection(page)
+    expect(items.find((c) => c?.name === 'Favorite Probe Coin')?.favorite).toBeFalsy()
 
     expect(errors).toEqual([])
   })

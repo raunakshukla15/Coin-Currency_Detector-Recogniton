@@ -20,6 +20,9 @@ backend/*.pyc
 backend/*.db
 backend/*.sqlite*
 
+# TLS certificates (Aiven ca.pem / client certs — never commit)
+backend/*.pem
+
 # Logs
 logs/
 *.log

@@ -376,6 +376,7 @@ def delete_chat(chat_id: int, user: dict = Depends(get_current_user)):
     if not chat:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     db.execute("DELETE FROM chats WHERE id = %s AND user_id = %s", (chat_id, user["id"]))
+    _cleanup_orphan_images(user["id"])
     return {"ok": True}
 
 

@@ -72,7 +72,7 @@ test.describe('Contact form', () => {
     // Detail must be one of the two honest states (emailed vs saved-only) —
     // never a claim that an email was sent when emailSent=false
     await expect(page.getByTestId('contact-success-detail')).toContainText(
-      /emailed to the team|email delivery to the team failed/i
+      /email notification was sent to the team|email notification could not be delivered/i
     )
 
     // The row really exists in MySQL with the submitted email
@@ -122,6 +122,35 @@ test.describe('Contact form', () => {
     expect(errors).toEqual([])
   })
 
+  test('DB failure shows the save-failure message and never a success panel', async ({ page }) => {
+    const errors = trackPageErrors(page)
+    const user = uniqueUser()
+    await signup(page, user)
+
+    // Simulate a database outage: the backend answers 500 for this POST.
+    await page.route('**/api/contact', (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Database error while saving your message.' })
+      })
+    )
+
+    await page.goto('/contact')
+    await page.getByTestId('contact-message').fill('This must not be reported as saved.')
+    await page.getByTestId('contact-submit').click()
+
+    // Honest failure state: generic wording (no internal exception text),
+    // and absolutely no success/confirmation panel.
+    await expect(page.getByTestId('contact-error')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('contact-error')).toHaveText(
+      'Your feedback could not be saved. Please try again.'
+    )
+    await expect(page.getByTestId('contact-success')).toHaveCount(0)
+
+    expect(errors).toEqual([])
+  })
+
   test('rating stars reflect the selected value', async ({ page }) => {
     const user = uniqueUser()
     await signup(page, user)
@@ -152,7 +181,7 @@ test.describe('Contact form', () => {
     const details = [
       ['Made by', 'Team 5'],
       ['Contact Number', '9561119717'],
-      ['Email', 'raunakbshukla133@gmail.com'],
+      ['Email', 'archanark1013@gmail.com'],
       ['Location', 'India']
     ]
     for (const [label, value] of details) {

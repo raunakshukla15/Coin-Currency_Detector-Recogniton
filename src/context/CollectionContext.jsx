@@ -124,38 +124,75 @@ export function CollectionProvider({ children }) {
   }, [collection, user?.id])
 
   const removeCoin = useCallback((id) => {
+    setSaveError('')
+    // Snapshot taken BEFORE the optimistic removal so a failed delete puts
+    // the item back exactly where it was (same pattern as Chatbot.deleteChat).
+    const snapshot = collection
+    const uid = user?.id
     setCollection((prev) => prev.filter((c) => c.id !== id))
     if (isAuthenticated()) {
       removeCollectionItem(id).catch((e) => {
         console.warn('Collection item could not be removed:', e?.message || e)
+        // A late failure from a previous account must never touch the
+        // current account's state or surface an error in its view.
+        if (uid !== userRef.current) return
+        setCollection((cur) => {
+          if (cur.some((c) => c.id === id)) return cur
+          const idx = snapshot.findIndex((c) => c.id === id)
+          if (idx < 0) return cur
+          const next = [...cur]
+          next.splice(Math.max(0, Math.min(idx, next.length)), 0, snapshot[idx])
+          return next
+        })
+        setSaveError("Couldn't remove this item from your collection. Please try again.")
       })
     }
-  }, [])
+  }, [collection, user?.id])
 
   const toggleFavorite = useCallback((id) => {
-    let nextValue = false
+    setSaveError('')
+    // The next value is derived from the CURRENT state up front — never from
+    // inside a setState updater, which React may run later (stale write risk).
+    const current = collection.find((c) => c.id === id)
+    if (!current) return
+    const nextValue = !current.favorite
+    const uid = user?.id
     setCollection((prev) =>
-      prev.map((c) => {
-        if (c.id !== id) return c
-        nextValue = !c.favorite
-        return { ...c, favorite: nextValue }
-      })
+      prev.map((c) => (c.id === id ? { ...c, favorite: nextValue } : c))
     )
     if (isAuthenticated()) {
       setCollectionFavorite(id, nextValue).catch((e) => {
         console.warn('Favorite could not be saved:', e?.message || e)
+        if (uid !== userRef.current) return
+        // Roll back only if this is still the value we optimistically set —
+        // a later successful toggle must never be clobbered by this failure.
+        setCollection((prev) =>
+          prev.map((c) =>
+            c.id === id && c.favorite === nextValue
+              ? { ...c, favorite: current.favorite }
+              : c
+          )
+        )
+        setSaveError("Couldn't update your favorite. Please try again.")
       })
     }
-  }, [])
+  }, [collection, user?.id])
 
   const resetCollection = useCallback(() => {
+    setSaveError('')
+    const snapshot = collection
+    const uid = user?.id
     setCollection([])
     if (isAuthenticated()) {
       clearCollectionItems().catch((e) => {
         console.warn('Collection could not be cleared:', e?.message || e)
+        if (uid !== userRef.current) return
+        // Restore only if the user has not added anything new meanwhile.
+        setCollection((cur) => (cur.length ? cur : snapshot))
+        setSaveError("Couldn't clear your collection. Please try again.")
       })
     }
-  }, [])
+  }, [collection, user?.id])
 
   const value = { collection, ready, saveError, addCoin, removeCoin, toggleFavorite, resetCollection }
 

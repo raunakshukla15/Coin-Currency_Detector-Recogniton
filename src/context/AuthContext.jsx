@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { authLogin, authSignup, authLogout, authMe } from '../api.js'
+import { authLogin, authSignup, authLogout, authMe, authDeleteAccount } from '../api.js'
 
 const AuthContext = createContext(null)
 const STORAGE_KEY = 'coinscan_auth'
@@ -130,7 +130,44 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
-  const value = { user, token, ready, login, signup, logout }
+  const clearLocalSession = () => {
+    setUser(null)
+    setToken(null)
+    clearPageSessionData()
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  // Permanently delete the signed-in account. The password lives only as a
+  // transient argument (never persisted or logged). Local auth/page state is
+  // cleared ONLY after the backend confirms success — on any failure the
+  // caller stays signed in with an error. A 401 means the account already
+  // no longer exists (e.g. deleted from a second tab), so the dead session
+  // is dropped and reported as done.
+  const deleteAccount = useCallback(
+    async (password) => {
+      if (!token) {
+        return { ok: false, error: 'Your session has expired. Please log in again.' }
+      }
+      try {
+        await authDeleteAccount(token, password)
+      } catch (e) {
+        if (e?.status === 401) {
+          clearLocalSession()
+          return { ok: true }
+        }
+        return { ok: false, error: e?.message || 'Account deletion failed. Please try again.' }
+      }
+      clearLocalSession()
+      return { ok: true }
+    },
+    [token]
+  )
+
+  const value = { user, token, ready, login, signup, logout, deleteAccount }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

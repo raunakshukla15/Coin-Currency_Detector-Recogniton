@@ -362,7 +362,7 @@ def state_i_recipient_configured():
     rcpt follows the config)."""
     apply_smtp(False)  # restore the real configuration (env/.env/defaults)
     expect(
-        config.CONTACT_TO == "raunakbshukla133@gmail.com",
+        config.CONTACT_TO == "archanark1013@gmail.com",
         f"CONTACT_TO must be the team inbox, got {config.CONTACT_TO!r}",
     )
 

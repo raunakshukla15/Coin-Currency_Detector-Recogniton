@@ -2,6 +2,7 @@
 
 import os
 import ssl as ssl_lib
+from contextlib import contextmanager
 
 import pymysql
 import pymysql.cursors
@@ -70,3 +71,38 @@ def execute(sql: str, params: tuple = ()):
         with conn.cursor() as cur:
             cur.execute(sql, params)
             return cur.lastrowid
+
+
+@contextmanager
+def transaction():
+    """Single connection running an explicit transaction.
+
+    Commits when the block completes normally, rolls back on ANY error
+    (including HTTPException raised inside the block), then closes the
+    connection. pymysql's plain connection context manager only closes
+    (implicit rollback), so commit/rollback are handled here.
+
+    The helpers above open one autocommit connection per call and cannot be
+    used for atomic multi-statement work — use this instead, e.g.:
+
+        with transaction() as cur:
+            cur.execute("DELETE FROM ...", (id,))
+            cur.execute("DELETE FROM ...", (id,))
+    """
+    conn = connection()
+    try:
+        conn.autocommit(False)
+        with conn.cursor() as cur:
+            yield cur
+        conn.commit()
+    except BaseException:
+        try:
+            conn.rollback()
+        except pymysql.MySQLError:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except pymysql.MySQLError:
+            pass

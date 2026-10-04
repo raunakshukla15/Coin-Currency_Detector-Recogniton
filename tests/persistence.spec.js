@@ -78,9 +78,11 @@ test.describe('Auth + data persistence', () => {
     // detected"), never invented
     await expect(page.getByText(/No obvious suspicious signs detected/i)).toBeVisible()
 
-    // Back to history, delete the scan, verify it is gone on the server too
+    // Back to history, delete the scan, verify it is gone on the server too.
+    // Scoped to the seeded entry's card: the sidebar also has a "Delete
+    // Account" button that would otherwise match .first().
     await page.goto('/history')
-    await page.getByRole('button', { name: /delete/i }).first().click()
+    await row.getByRole('button', { name: /delete/i }).first().click()
     // confirmation dialog if present
     const confirm = page.getByRole('button', { name: /^(yes|confirm|delete)$/i })
     if (await confirm.count()) await confirm.first().click()

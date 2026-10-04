@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Home, ArrowLeftRight, MessageCircle, Coins, MessageSquare, LogOut, History } from 'lucide-react'
 import Logo from './Logo.jsx'
+import DeleteAccount from './DeleteAccount.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 
 const NAV = [
@@ -64,6 +65,8 @@ export default function Sidebar() {
       <div style={{ flex: 1, minHeight: 0 }} />
 
       <div className="divider" style={{ margin: '16px 0 14px' }} />
+
+      <DeleteAccount />
 
       <button
         className="nav-item"
