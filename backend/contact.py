@@ -1,23 +1,25 @@
-"""Contact Us endpoint: stores feedback and emails it via SMTP.
+"""Contact Us endpoint: stores feedback and emails it via the Brevo API.
 
 Flow: validate -> dedupe (submissionId) -> SAVE TO DB FIRST -> best-effort
-email. A later SMTP failure can never lose a submission, and the response
+email. A later delivery failure can never lose a submission, and the response
 always truthfully separates "saved" from "emailed".
 
 Rating semantics: 0 means "not rated" (the user left the stars untouched).
 0 is stored as-is for backward compatibility with existing rows; 1-5 are
 explicit ratings.
 
-Email recipient: config.CONTACT_TO — the team inbox shown in the Contact
-page's CONTACT_INFO (env-overridable; default is the team address).
+Delivery: Brevo's transactional REST API over HTTPS (api-key header) —
+replaces the old Gmail SMTP path, which Render Free blocks on port 587.
+Recipient: config.CONTACT_TO — the team inbox shown in the Contact page's
+CONTACT_INFO (env-overridable; default is the team address).
 """
 
 import datetime
+import json
 import re
-import smtplib
-import ssl
 import sys
-from email.message import EmailMessage
+import urllib.error
+import urllib.request
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -28,6 +30,7 @@ from deps import get_optional_user
 
 router = APIRouter(prefix="/api/contact", tags=["contact"])
 
+BREVO_URL = "https://api.brevo.com/v3/smtp/email"
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 # Client-generated idempotency key (crypto.randomUUID() = 8-36 base62/dash).
 SUBMISSION_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,36}$")
@@ -57,6 +60,28 @@ class ContactIn(BaseModel):
     )
 
 
+def _brevo_request(payload: dict, api_key: str) -> int:
+    """POST one transactional email to Brevo's HTTPS API; return HTTP status.
+
+    Standard-library urllib only (no new dependency). Any non-2xx response
+    raises urllib.error.HTTPError; network/DNS/TLS failures raise
+    urllib.error.URLError. The API key travels ONLY in the `api-key` header
+    and is never included in any log or exception message here.
+    """
+    req = urllib.request.Request(
+        BREVO_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "api-key": api_key,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 — fixed HTTPS URL
+        return getattr(resp, "status", None) or resp.getcode()
+
+
 def send_email(
     text: str,
     rating: int,
@@ -68,14 +93,14 @@ def send_email(
 ) -> tuple[bool, str]:
     """Deliver the feedback message to the team inbox (config.CONTACT_TO).
 
-    Called AFTER the row is already persisted — an SMTP outage must never
+    Called AFTER the row is already persisted — a Brevo/API outage must never
     lose the database submission. Returns (ok, reason) where reason is a
     sanitized token: ok | not_configured | no_recipient | delivery_failed.
     """
-    if not config.SMTP_USER or not config.SMTP_PASSWORD:
+    if not config.BREVO_API_KEY or not config.BREVO_SENDER_EMAIL:
         _log(
-            "SMTP not configured (SMTP_USER/SMTP_PASSWORD empty in backend/.env) "
-            "— skipping email; the feedback is saved in the database."
+            "Brevo not configured (BREVO_API_KEY/BREVO_SENDER_EMAIL empty in the "
+            "environment) — skipping email; the feedback is saved in the database."
         )
         return False, "not_configured"
     if not config.CONTACT_TO:
@@ -83,12 +108,7 @@ def send_email(
         return False, "no_recipient"
 
     sender_name = _sanitize_header(username or "Guest")
-    msg = EmailMessage()
-    msg["Subject"] = _sanitize_header(f"CoinScan Feedback ({rating}/5) from {sender_name}")
-    msg["From"] = config.SMTP_USER
-    msg["To"] = config.CONTACT_TO
-    msg["Reply-To"] = email or config.SMTP_USER
-
+    subject = _sanitize_header(f"CoinScan Feedback ({rating}/5) from {sender_name}")
     body = (
         f"New feedback received from the CoinScan Contact Us page.\n\n"
         f"Sender name: {_sanitize_header(username) or '-'}\n"
@@ -99,28 +119,39 @@ def send_email(
         f"Submission id: {submission_id or '-'}\n\n"
         f"Message:\n{text}\n"
     )
-    msg.set_content(body)
+    payload = {
+        "sender": {"name": "CoinScan", "email": config.BREVO_SENDER_EMAIL},
+        "to": [{"email": config.CONTACT_TO}],
+        "subject": subject,
+        "textContent": body,
+    }
+    if email:
+        payload["replyTo"] = {"email": email}
 
     try:
-        if config.SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(
-                config.SMTP_HOST, config.SMTP_PORT, context=ssl.create_default_context()
-            ) as srv:
-                srv.login(config.SMTP_USER, config.SMTP_PASSWORD)
-                srv.send_message(msg)
-        else:
-            with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=20) as srv:
-                if config.SMTP_STARTTLS:
-                    srv.starttls(context=ssl.create_default_context())
-                srv.login(config.SMTP_USER, config.SMTP_PASSWORD)
-                srv.send_message(msg)
-        return True, "ok"
-    except Exception as exc:  # noqa: BLE001 — log type only, never the raw error
+        status = _brevo_request(payload, config.BREVO_API_KEY)
+    except urllib.error.HTTPError as exc:
+        # Brevo answered with an error (4xx/5xx). Log the status only —
+        # never the API key or the response body.
         _log(
-            f"email delivery to CONTACT_TO failed ({type(exc).__name__}); "
+            f"Brevo email delivery failed (HTTP {exc.code}); "
             "the feedback remains saved in the database."
         )
         return False, "delivery_failed"
+    except Exception as exc:  # noqa: BLE001 — log type only, never the raw error
+        _log(
+            f"Brevo email delivery failed ({type(exc).__name__}); "
+            "the feedback remains saved in the database."
+        )
+        return False, "delivery_failed"
+
+    if 200 <= status < 300:
+        return True, "ok"
+    _log(
+        f"Brevo email delivery failed (HTTP {status}); "
+        "the feedback remains saved in the database."
+    )
+    return False, "delivery_failed"
 
 
 @router.post("")
@@ -153,7 +184,7 @@ def submit(body: ContactIn, user: dict | None = Depends(get_optional_user)):
     linked = f"{user['username']} (user #{user['id']})" if user else "Guest (not signed in)"
     submitted_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
-    # 1) Persist FIRST — the message is never lost to a later SMTP failure.
+    # 1) Persist FIRST — the message is never lost to a later delivery failure.
     try:
         db.execute(
             "INSERT INTO contact_messages "

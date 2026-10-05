@@ -96,9 +96,11 @@ def main_run():
     print(f"database under test: host={config.MYSQL_HOST} db={config.MYSQL_DATABASE}")
     assert config.MYSQL_HOST in ("localhost", "127.0.0.1"), "refusing: not a local database"
 
-    # No real email may leave this suite.
+    # No real email may leave this suite (SMTP creds AND Brevo creds blanked).
     orig_user, orig_pw = config.SMTP_USER, config.SMTP_PASSWORD
+    orig_brevo_key, orig_brevo_sender = config.BREVO_API_KEY, config.BREVO_SENDER_EMAIL
     config.SMTP_USER, config.SMTP_PASSWORD = "", ""
+    config.BREVO_API_KEY, config.BREVO_SENDER_EMAIL = "", ""
     start = counts()
     print(f"counts at start: {json.dumps(start)}")
 
@@ -370,7 +372,7 @@ def main_run():
             }, headers=auth(tok_a))
             assert r.status_code == 200 and r.json()["saved"] is True, r.text
             assert r.json()["emailSent"] is False and r.json()["emailReason"] == "not_configured", \
-                "SMTP blanked but email reported sent!"
+                "email provider blanked but email reported sent!"
             row = db.fetch_one("SELECT user_id FROM contact_messages WHERE submission_id=%s", (AUTHED_SUB,))
             assert row and int(row["user_id"]) == id_a, "authenticated feedback not linked to account"
             guest = db.fetch_one("SELECT user_id FROM contact_messages WHERE submission_id=%s", (GUEST_SUB,))
@@ -383,7 +385,7 @@ def main_run():
             assert n == 1, "dedupe failed"
             assert config.CONTACT_TO == "archanark1013@gmail.com", config.CONTACT_TO
             return "authed linked to A, guest NULL, dedupe 1 row, recipient=archanark1013"
-        check("E18 contact save/ownership/dedupe (SMTP disabled: no real email)", e18_contact)
+        check("E18 contact save/ownership/dedupe (email disabled: no real email)", e18_contact)
 
         # ---------- F: account deletion ----------
         def e19_wrong_pw_delete():
@@ -445,6 +447,7 @@ def main_run():
     finally:
         # ---------- cleanup: only this suite's fixtures ----------
         config.SMTP_USER, config.SMTP_PASSWORD = orig_user, orig_pw
+        config.BREVO_API_KEY, config.BREVO_SENDER_EMAIL = orig_brevo_key, orig_brevo_sender
         for u in (USER_A, USER_B):
             try:
                 t = token(c, u)

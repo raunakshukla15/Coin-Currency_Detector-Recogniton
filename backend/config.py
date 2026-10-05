@@ -50,6 +50,13 @@ SMTP_STARTTLS = (
     else SMTP_PORT in (587, 25)
 )
 
+# Brevo transactional email over HTTPS — the active delivery path used by
+# contact.py (port 587 SMTP is blocked on Render Free). The SMTP_* settings
+# above are intentionally kept until Brevo delivery is verified in production.
+# BREVO_API_KEY is a secret: it is never printed, logged, or returned.
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+BREVO_SENDER_EMAIL = os.getenv("BREVO_SENDER_EMAIL", "").strip()
+
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
